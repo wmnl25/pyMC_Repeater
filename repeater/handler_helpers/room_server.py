@@ -82,7 +82,7 @@ class RoomServer:
         max_posts: int = 32,
         config_path: str = None,
         config: dict = None,
-        save_config_callback = None,
+        config_manager = None,
         send_advert_callback = None
     ):
  
@@ -142,12 +142,12 @@ class RoomServer:
         
         # Initialize CLI handler for room server commands
         self.cli = None
-        if config_path and config and save_config_callback:
+        if config_path and config and config_manager:
             from .mesh_cli import MeshCLI
             self.cli = MeshCLI(
                 config_path,
                 config,
-                save_config_callback,
+                config_manager,
                 identity_type="room_server",
                 enable_regions=False,  # Room servers don't support region commands
                 send_advert_callback=send_room_advert,

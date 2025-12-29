@@ -25,7 +25,7 @@ TXT_TYPE_CLI_DATA = 0x01
 class TextHelper:
 
     def __init__(self, identity_manager, packet_injector=None, acl_dict=None, log_fn=None, 
-                 config_path: str = None, config: dict = None, save_config_callback=None,
+                 config_path: str = None, config: dict = None, config_manager=None,
                  sqlite_handler=None, send_advert_callback=None):
 
         self.identity_manager = identity_manager
@@ -47,7 +47,7 @@ class TextHelper:
         # Store config for later use
         self.config_path = config_path
         self.config = config
-        self.save_config_callback = save_config_callback
+        self.config_manager = config_manager
         
         # Store for later CLI initialization (needs identity and storage)
         self.config_path = config_path
@@ -99,11 +99,11 @@ class TextHelper:
             logger.info(f"Set repeater hash for CLI: 0x{hash_byte:02X}")
             
             # Initialize CLI handler now that we have the repeater identity
-            if self.config_path and self.config and self.save_config_callback:
+            if self.config_path and self.config and self.config_manager:
                 self.cli = MeshCLI(
                     self.config_path,
                     self.config,
-                    self.save_config_callback,
+                    self.config_manager,
                     identity_type="repeater",
                     enable_regions=True,
                     send_advert_callback=self.send_advert_callback,
@@ -138,7 +138,7 @@ class TextHelper:
                     max_posts=max_posts,
                     config_path=self.config_path,
                     config=self.config,
-                    save_config_callback=self.save_config_callback
+                    config_manager=self.config_manager
                 )
                 
                 self.room_servers[hash_byte] = room_server

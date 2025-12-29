@@ -159,8 +159,15 @@ class MeshCLI:
     
     def _cmd_reboot(self) -> str:
         """Reboot the repeater process."""
-        logger.warning("Reboot command received - not implemented (use systemctl restart)")
-        return "Error: Use systemctl restart pymc-repeater"
+        from repeater.service_utils import restart_service
+        
+        logger.warning("Reboot command received via repeater CLI")
+        success, message = restart_service()
+        
+        if success:
+            return f"OK - {message}"
+        else:
+            return f"Error: {message}"
     
     def _cmd_advert(self) -> str:
         """Send self advertisement."""

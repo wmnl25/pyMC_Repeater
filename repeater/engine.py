@@ -710,23 +710,15 @@ class RepeaterHandler(BaseHandler):
                 "node_name": repeater_config.get("node_name", "Unknown"),
                 "repeater": {
                     "mode": repeater_config.get("mode", "forward"),
-                    "use_score_for_tx": self.use_score_for_tx,
-                    "score_threshold": self.score_threshold,
-                    "send_advert_interval_hours": self.send_advert_interval_hours,
+                    "use_score_for_tx": repeater_config.get("use_score_for_tx", False),
+                    "score_threshold": repeater_config.get("score_threshold", 0.3),
+                    "send_advert_interval_hours": repeater_config.get("send_advert_interval_hours", 10),
                     "latitude": repeater_config.get("latitude", 0.0),
                     "longitude": repeater_config.get("longitude", 0.0),
-                    # PYMC_CONSOLE_STATS_PATCH - MeshCore CLI parity
                     "max_flood_hops": repeater_config.get("max_flood_hops", 3),
                     "advert_interval_minutes": repeater_config.get("advert_interval_minutes", 120),
                 },
-                "radio": {
-                    "frequency": self.radio_config.get("frequency", 0),
-                    "tx_power": self.radio_config.get("tx_power", 0),
-                    "bandwidth": self.radio_config.get("bandwidth", 0),
-                    "spreading_factor": self.radio_config.get("spreading_factor", 0),
-                    "coding_rate": self.radio_config.get("coding_rate", 0),
-                    "preamble_length": self.radio_config.get("preamble_length", 0),
-                },
+                "radio": self.config.get("radio", {}),  # Read from live config, not cached radio_config
                 "duty_cycle": {
                     "max_airtime_percent": max_duty_cycle_percent,
                     "enforcement_enabled": duty_cycle_config.get("enforcement_enabled", True),
@@ -806,6 +798,27 @@ class RepeaterHandler(BaseHandler):
                 logger.debug("No send_advert_func configured")
         except Exception as e:
             logger.error(f"Error sending periodic advert: {e}")
+
+    def reload_runtime_config(self):
+        """Reload runtime configuration from self.config (called after live config updates)."""
+        try:
+            # Refresh delay factors
+            self.tx_delay_factor = self.config.get("delays", {}).get("tx_delay_factor", 1.0)
+            self.direct_tx_delay_factor = self.config.get("delays", {}).get("direct_tx_delay_factor", 0.5)
+            
+            # Refresh repeater settings
+            repeater_config = self.config.get("repeater", {})
+            self.use_score_for_tx = repeater_config.get("use_score_for_tx", False)
+            self.score_threshold = repeater_config.get("score_threshold", 0.3)
+            self.send_advert_interval_hours = repeater_config.get("send_advert_interval_hours", 10)
+            self.cache_ttl = repeater_config.get("cache_ttl", 60)
+            
+            # Note: Radio config changes require restart as they affect hardware
+            # Note: Airtime manager has its own config reference that gets updated
+            
+            logger.info("Runtime configuration reloaded successfully")
+        except Exception as e:
+            logger.error(f"Error reloading runtime config: {e}")
 
     def cleanup(self):
         if self._background_task and not self._background_task.done():

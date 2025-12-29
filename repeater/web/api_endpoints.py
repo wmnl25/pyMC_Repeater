@@ -38,6 +38,7 @@ logger = logging.getLogger("HTTPServer")
 # POST /api/send_advert
 # POST /api/set_mode {"mode": "forward|monitor"}
 # POST /api/set_duty_cycle {"enabled": true|false}
+# POST /api/restart_service
 
 # CAD Calibration
 # POST /api/cad_calibration_start {"samples": 8, "delay": 100}
@@ -88,6 +89,14 @@ class APIEndpoints:
         self.daemon_instance = daemon_instance
         self._config_path = config_path or '/etc/pymc_repeater/config.yaml'
         self.cad_calibration = CADCalibrationEngine(daemon_instance, event_loop)
+        
+        # Initialize ConfigManager for centralized config management
+        from repeater.config_manager import ConfigManager
+        self.config_manager = ConfigManager(
+            config_path=self._config_path,
+            config=self.config,
+            daemon_instance=daemon_instance
+        )
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
@@ -260,6 +269,35 @@ class APIEndpoints:
             raise
         except Exception as e:
             logger.error(f"Error setting duty cycle: {e}", exc_info=True)
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def restart_service(self):
+        """Restart the pymc-repeater service via systemctl."""
+        # Enable CORS for this endpoint only if configured
+        self._set_cors_headers()
+        
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        
+        try:
+            self._require_post()
+            from repeater.service_utils import restart_service as do_restart
+            
+            logger.warning("Service restart requested via API")
+            success, message = do_restart()
+            
+            if success:
+                return {"success": True, "message": message}
+            else:
+                return self._error(message)
+                
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in restart_service endpoint: {e}", exc_info=True)
             return self._error(e)
 
     @cherrypy.expose
@@ -599,7 +637,7 @@ class APIEndpoints:
             self.config["radio"]["cad"]["min_threshold"] = min_val
             
             config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            self._save_config_to_file(config_path)
+            self.config_manager.save_to_file()
             
             logger.info(f"Saved CAD settings to config: peak={peak}, min={min_val}, rate={detection_rate:.1f}%")
             return {
@@ -623,6 +661,10 @@ class APIEndpoints:
         POST /api/update_radio_config
         Body: {
             "tx_power": 22,              # TX power in dBm (2-30)
+            "frequency": 869618000,      # Frequency in Hz (100-1000 MHz)
+            "bandwidth": 62500,          # Bandwidth in Hz (valid: 7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500 kHz)
+            "spreading_factor": 8,       # Spreading factor (5-12)
+            "coding_rate": 8,            # Coding rate (5-8 for 4/5 to 4/8)
             "tx_delay_factor": 1.0,      # TX delay factor (0.0-5.0)
             "direct_tx_delay_factor": 0.5,  # Direct TX delay (0.0-5.0)
             "rx_delay_base": 0.0,        # RX delay base (>= 0)
@@ -633,6 +675,8 @@ class APIEndpoints:
             "flood_advert_interval_hours": 10,  # Flood advert interval (0 or 3-48)
             "advert_interval_minutes": 120      # Local advert interval (0 or 1-10080)
         }
+        
+        Note: Radio hardware changes (frequency, bandwidth, SF, CR) require restart to apply.
         
         Returns: {"success": true, "data": {"applied": [...], "live_update": true}}
         """
@@ -663,6 +707,39 @@ class APIEndpoints:
                     return self._error("TX power must be 2-30 dBm")
                 self.config["radio"]["tx_power"] = power
                 applied.append(f"power={power}dBm")
+            
+            # Update frequency (in Hz)
+            if "frequency" in data:
+                freq = float(data["frequency"])
+                if freq < 100_000_000 or freq > 1_000_000_000:
+                    return self._error("Frequency must be 100-1000 MHz")
+                self.config["radio"]["frequency"] = freq
+                applied.append(f"freq={freq/1_000_000:.3f}MHz")
+            
+            # Update bandwidth (in Hz)
+            if "bandwidth" in data:
+                bw = int(float(data["bandwidth"]))
+                valid_bw = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000]
+                if bw not in valid_bw:
+                    return self._error(f"Bandwidth must be one of {[b/1000 for b in valid_bw]} kHz")
+                self.config["radio"]["bandwidth"] = bw
+                applied.append(f"bw={bw/1000}kHz")
+            
+            # Update spreading factor
+            if "spreading_factor" in data:
+                sf = int(data["spreading_factor"])
+                if sf < 5 or sf > 12:
+                    return self._error("Spreading factor must be 5-12")
+                self.config["radio"]["spreading_factor"] = sf
+                applied.append(f"sf={sf}")
+            
+            # Update coding rate
+            if "coding_rate" in data:
+                cr = int(data["coding_rate"])
+                if cr < 5 or cr > 8:
+                    return self._error("Coding rate must be 5-8 (for 4/5 to 4/8)")
+                self.config["radio"]["coding_rate"] = cr
+                applied.append(f"cr=4/{cr}")
             
             # Update TX delay factor
             if "tx_delay_factor" in data:
@@ -739,44 +816,21 @@ class APIEndpoints:
             if not applied:
                 return self._error("No valid settings provided")
             
-            # Save to config file
-            config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            self._save_config_to_file(config_path)
-            
-            # Live update: Also update daemon's in-memory config for immediate effect
-            live_updated = False
-            if self.daemon_instance and hasattr(self.daemon_instance, 'config'):
-                try:
-                    daemon_config = self.daemon_instance.config
-                    
-                    # Update repeater section in daemon config
-                    if 'repeater' not in daemon_config:
-                        daemon_config['repeater'] = {}
-                    for key in ['node_name', 'latitude', 'longitude', 'max_flood_hops', 
-                                'advert_interval_minutes', 'send_advert_interval_hours']:
-                        if key in self.config.get('repeater', {}):
-                            daemon_config['repeater'][key] = self.config['repeater'][key]
-                    
-                    # Update delays section in daemon config
-                    if 'delays' not in daemon_config:
-                        daemon_config['delays'] = {}
-                    for key in ['tx_delay_factor', 'direct_tx_delay_factor', 'rx_delay_base']:
-                        if key in self.config.get('delays', {}):
-                            daemon_config['delays'][key] = self.config['delays'][key]
-                    
-                    live_updated = True
-                    logger.info("Live updated daemon config")
-                except Exception as e:
-                    logger.warning(f"Could not live update daemon config: {e}")
+            # Save to config file and live update daemon in one operation
+            result = self.config_manager.update_and_save(
+                updates={},  # Updates already applied to self.config above
+                live_update=True,
+                live_update_sections=['repeater', 'delays', 'radio']
+            )
             
             logger.info(f"Radio config updated: {', '.join(applied)}")
             
             return self._success({
                 "applied": applied,
-                "persisted": True,
-                "live_update": live_updated,
-                "restart_required": not live_updated,
-                "message": "Settings applied immediately." if live_updated else "Settings saved. Restart service to apply changes."
+                "persisted": result.get("saved", False),
+                "live_update": result.get("live_updated", False),
+                "restart_required": not result.get("live_updated", False),
+                "message": "Settings applied immediately." if result.get("live_updated") else "Settings saved. Restart service to apply changes."
             })
             
         except cherrypy.HTTPError:
@@ -784,28 +838,6 @@ class APIEndpoints:
         except Exception as e:
             logger.error(f"Error updating radio config: {e}")
             return self._error(str(e))
-
-    def _save_config_to_file(self, config_path):
-        try:
-            import yaml
-            import os
-            os.makedirs(os.path.dirname(config_path), exist_ok=True)
-            with open(config_path, 'w') as f:
-                # Use safe_dump with explicit width to prevent line wrapping
-                # Setting width to a very large number prevents truncation of long strings like identity keys
-                yaml.safe_dump(
-                    self.config, 
-                    f, 
-                    default_flow_style=False, 
-                    indent=2, 
-                    width=1000000,  # Very large width to prevent any line wrapping
-                    sort_keys=False,
-                    allow_unicode=True
-                )
-            logger.info(f"Configuration saved to {config_path}")
-        except Exception as e:
-            logger.error(f"Failed to save config to {config_path}: {e}")
-            raise
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -1106,9 +1138,9 @@ class APIEndpoints:
                 
                 logger.info(f"Using config path for global flood policy: {config_path}")
                 
-                # Update the configuration file using the same method as CAD
+                # Update the configuration file using ConfigManager
                 try:
-                    self._save_config_to_file(config_path)
+                    self.config_manager.save_to_file()
                     logger.info(f"Updated running config and saved global flood policy to file: {'allow' if global_flood_allow else 'deny'}")
                 except Exception as e:
                     logger.error(f"Failed to save global flood policy to file: {e}")
@@ -1376,11 +1408,7 @@ class APIEndpoints:
             self.config["identities"]["room_servers"] = room_servers
             
             # Save to file
-            config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            if self.daemon_instance and hasattr(self.daemon_instance, 'config_path'):
-                config_path = self.daemon_instance.config_path
-            
-            self._save_config_to_file(config_path)
+            self.config_manager.save_to_file()
             
             logger.info(f"Created new identity: {name} (type: {identity_type}){' with auto-generated key' if key_was_generated else ''}")
             
@@ -1527,11 +1555,7 @@ class APIEndpoints:
             room_servers[identity_index] = identity
             self.config["identities"]["room_servers"] = room_servers
             
-            config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            if self.daemon_instance and hasattr(self.daemon_instance, 'config_path'):
-                config_path = self.daemon_instance.config_path
-            
-            self._save_config_to_file(config_path)
+            self.config_manager.save_to_file()
             
             logger.info(f"Updated identity: {name}")
             
@@ -1628,11 +1652,7 @@ class APIEndpoints:
             # Update config
             self.config["identities"]["room_servers"] = room_servers
             
-            config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            if self.daemon_instance and hasattr(self.daemon_instance, 'config_path'):
-                config_path = self.daemon_instance.config_path
-            
-            self._save_config_to_file(config_path)
+            self.config_manager.save_to_file()
             
             logger.info(f"Deleted identity: {name}")
             

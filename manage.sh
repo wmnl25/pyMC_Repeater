@@ -244,6 +244,19 @@ install_repeater() {
     mkdir -p /var/lib/pymc_repeater/.config/pymc_repeater
     chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config
     
+    # Configure polkit for passwordless service restart
+    mkdir -p /etc/polkit-1/rules.d
+    cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "pymc-repeater.service" &&
+        subject.user == "repeater") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+    chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+    
     echo "75"; echo "# Starting service..."
     systemctl enable "$SERVICE_NAME"
     
@@ -376,6 +389,18 @@ upgrade_repeater() {
         # Pre-create the .config directory that the service will need
         mkdir -p /var/lib/pymc_repeater/.config/pymc_repeater 2>/dev/null || true
         chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config 2>/dev/null || true
+        # Configure polkit for passwordless service restart
+        mkdir -p /etc/polkit-1/rules.d
+        cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "pymc-repeater.service" &&
+        subject.user == "repeater") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+        chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
         echo "    ✓ Permissions updated"
         
         echo "[7/9] Reloading systemd..."

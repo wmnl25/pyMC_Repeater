@@ -4,6 +4,7 @@ import os
 import sys
 
 from repeater.config import get_radio_for_board, load_config
+from repeater.config_manager import ConfigManager
 from repeater.engine import RepeaterHandler
 from repeater.web.http_server import HTTPStatsServer, _log_buffer
 from repeater.handler_helpers import TraceHelper, DiscoveryHelper, AdvertHelper, LoginHelper, TextHelper, PathHelper, ProtocolRequestHelper
@@ -24,6 +25,7 @@ class RepeaterDaemon:
         self.local_hash = None
         self.local_identity = None
         self.identity_manager = None
+        self.config_manager = None
         self.http_server = None
         self.trace_helper = None
         self.advert_helper = None
@@ -186,6 +188,14 @@ class RepeaterDaemon:
             
             logger.info("Login processing helper initialized")
             
+            # Initialize ConfigManager for centralized config management
+            self.config_manager = ConfigManager(
+                config_path=getattr(self, 'config_path', '/etc/pymc_repeater/config.yaml'),
+                config=self.config,
+                daemon_instance=self
+            )
+            logger.info("Config manager initialized")
+            
             # Initialize text message helper with per-identity ACLs
             self.text_helper = TextHelper(
                 identity_manager=self.identity_manager,
@@ -194,7 +204,7 @@ class RepeaterDaemon:
                 log_fn=logger.info,
                 config_path=getattr(self, 'config_path', None),  # For CLI to save changes
                 config=self.config,  # For CLI to read/modify settings
-                save_config_callback=lambda: self._save_config(getattr(self, 'config_path', '/tmp/config.yaml')),  # For CLI to persist changes
+                config_manager=self.config_manager,  # New centralized config manager
                 sqlite_handler=self.repeater_handler.storage.sqlite_handler if self.repeater_handler and self.repeater_handler.storage else None,  # For room server database
                 send_advert_callback=self.send_advert,  # For CLI advert command
             )
@@ -244,17 +254,6 @@ class RepeaterDaemon:
 
         except Exception as e:
             logger.error(f"Failed to initialize dispatcher: {e}")
-            raise
-    
-    def _save_config(self, config_path: str):
-        """Save configuration to file (called by CLI when settings change)."""
-        import yaml
-        try:
-            with open(config_path, 'w') as f:
-                yaml.dump(self.config, f, default_flow_style=False)
-            logger.info(f"Configuration saved to {config_path}")
-        except Exception as e:
-            logger.error(f"Failed to save config: {e}")
             raise
 
     async def _load_additional_identities(self):
