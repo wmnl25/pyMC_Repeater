@@ -428,7 +428,8 @@ class APIEndpoints:
                 import time
                 time.sleep(2)  # Give time for response to be sent
                 try:
-                    subprocess.run(['sudo', 'systemctl', 'restart', 'pymc-repeater'], check=False)
+                    # Use systemctl without sudo - polkit rules allow the repeater user to restart the service
+                    subprocess.run(['systemctl', 'restart', 'pymc-repeater'], check=False)
                 except Exception as e:
                     logger.error(f"Failed to restart service: {e}")
             
