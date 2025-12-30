@@ -8,74 +8,112 @@ import cherrypy
 from repeater import __version__
 from repeater.config import update_global_flood_policy
 from .cad_calibration_engine import CADCalibrationEngine
+from .auth.middleware import require_auth
+from .auth_endpoints import AuthAPIEndpoints
 from pymc_core.protocol import CryptoUtils
 
 logger = logging.getLogger("HTTPServer")
 
 
+# ============================================================================
+# API ENDPOINT DOCUMENTATION
+# ============================================================================
+
+# Authentication (see auth_endpoints.py for implementation)
+# POST   /auth/login - Authenticate and get JWT token
+# POST   /auth/refresh - Refresh JWT token
+# GET    /auth/verify - Verify current authentication
+# POST   /auth/change_password - Change admin password
+# GET    /api/auth/tokens - List all API tokens (RESTful)
+# POST   /api/auth/tokens - Create new API token (RESTful)
+# DELETE /api/auth/tokens/{token_id} - Revoke API token (RESTful)
+
 # System
-# GET /api/stats
-# GET /api/logs
-
-# Packets
-# GET /api/packet_stats?hours=24
-# GET /api/recent_packets?limit=100
-# GET /api/filtered_packets?type=4&route=1&start_timestamp=X&end_timestamp=Y&limit=1000
-# GET /api/packet_by_hash?packet_hash=abc123
-# GET /api/packet_type_stats?hours=24
-
-# Charts & RRD
-# GET /api/rrd_data?start_time=X&end_time=Y&resolution=average
-# GET /api/packet_type_graph_data?hours=24&resolution=average&types=all
-# GET /api/metrics_graph_data?hours=24&resolution=average&metrics=all
-
-# Noise Floor
-# GET /api/noise_floor_history?hours=24
-# GET /api/noise_floor_stats?hours=24  
-# GET /api/noise_floor_chart_data?hours=24
+# GET    /api/stats - Get system statistics
+# GET    /api/logs - Get system logs
+# GET    /api/hardware_stats - Get hardware statistics
+# GET    /api/hardware_processes - Get process information
+# POST   /api/restart_service - Restart the repeater service
+# GET    /api/openapi - Get OpenAPI specification
 
 # Repeater Control
-# POST /api/send_advert
-# POST /api/set_mode {"mode": "forward|monitor"}
-# POST /api/set_duty_cycle {"enabled": true|false}
-# POST /api/restart_service
+# POST   /api/send_advert - Send repeater advertisement
+# POST   /api/set_mode {"mode": "forward|monitor"} - Set repeater mode
+# POST   /api/set_duty_cycle {"enabled": true|false} - Enable/disable duty cycle
+# POST   /api/update_duty_cycle_config {"enabled": true, "on_time": 300, "off_time": 60} - Update duty cycle config
+# POST   /api/update_radio_config - Update radio configuration
+
+# Packets
+# GET    /api/packet_stats?hours=24 - Get packet statistics
+# GET    /api/packet_type_stats?hours=24 - Get packet type statistics  
+# GET    /api/route_stats?hours=24 - Get route statistics
+# GET    /api/recent_packets?limit=100 - Get recent packets
+# GET    /api/filtered_packets?type=4&route=1&start_timestamp=X&end_timestamp=Y&limit=1000 - Get filtered packets
+# GET    /api/packet_by_hash?packet_hash=abc123 - Get specific packet by hash
+
+# Charts & RRD
+# GET    /api/rrd_data?start_time=X&end_time=Y&resolution=average - Get RRD data
+# GET    /api/packet_type_graph_data?hours=24&resolution=average&types=all - Get packet type graph data
+# GET    /api/metrics_graph_data?hours=24&resolution=average&metrics=all - Get metrics graph data
+
+# Noise Floor
+# GET    /api/noise_floor_history?hours=24 - Get noise floor history
+# GET    /api/noise_floor_stats?hours=24 - Get noise floor statistics
+# GET    /api/noise_floor_chart_data?hours=24 - Get noise floor chart data
 
 # CAD Calibration
-# POST /api/cad_calibration_start {"samples": 8, "delay": 100}
-# POST /api/cad_calibration_stop
-# POST /api/save_cad_settings {"peak": 127, "min_val": 64}
-# GET  /api/cad_calibration_stream (SSE)
+# POST   /api/cad_calibration_start {"samples": 8, "delay": 100} - Start CAD calibration
+# POST   /api/cad_calibration_stop - Stop CAD calibration
+# POST   /api/save_cad_settings {"peak": 127, "min_val": 64} - Save CAD settings
+# GET    /api/cad_calibration_stream - CAD calibration SSE stream
+
+# Adverts & Contacts
+# GET    /api/adverts_by_contact_type?contact_type=X&limit=100&hours=24 - Get adverts by contact type
+# GET    /api/advert?advert_id=123 - Get specific advert
+
+# Transport Keys
+# GET    /api/transport_keys - List all transport keys
+# POST   /api/transport_keys - Create new transport key
+# GET    /api/transport_key?key_id=X - Get specific transport key
+# DELETE /api/transport_key?key_id=X - Delete transport key
+
+# Network Policy
+# GET    /api/global_flood_policy - Get global flood policy
+# POST   /api/global_flood_policy - Update global flood policy
+# POST   /api/ping_neighbor - Ping a neighbor node
 
 # Identity Management
 # GET    /api/identities - List all identities
 # GET    /api/identity?name=<name> - Get specific identity
-# POST   /api/create_identity {"name": "...", "identity_key": "...", "type": "room_server", "settings": {...}}
-# PUT    /api/update_identity {"name": "...", "new_name": "...", "identity_key": "...", "settings": {...}}
-# DELETE /api/delete_identity?name=<name>
-# POST   /api/send_room_server_advert {"name": "..."} - Send advert for room server
+# POST   /api/create_identity {"name": "...", "identity_key": "...", "type": "room_server", "settings": {...}} - Create identity
+# PUT    /api/update_identity {"name": "...", "new_name": "...", "identity_key": "...", "settings": {...}} - Update identity
+# DELETE /api/delete_identity?name=<name> - Delete identity
+# POST   /api/send_room_server_advert {"name": "...", "node_name": "...", "latitude": 0.0, "longitude": 0.0} - Send room server advert
 
 # ACL (Access Control List)
-# GET  /api/acl_info - Get ACL configuration and stats for all identities
-# GET  /api/acl_clients?identity_hash=0x42&identity_name=repeater - List authenticated clients
-# POST /api/acl_remove_client {"public_key": "...", "identity_hash": "0x42"} - Remove client from ACL
-# GET  /api/acl_stats - Overall ACL statistics
+# GET    /api/acl_info - Get ACL configuration and stats for all identities
+# GET    /api/acl_clients?identity_hash=0x42&identity_name=repeater - List authenticated clients
+# POST   /api/acl_remove_client {"public_key": "...", "identity_hash": "0x42"} - Remove client from ACL
+# GET    /api/acl_stats - Overall ACL statistics
 
 # Room Server
-# GET  /api/room_messages?room_name=General&limit=50&offset=0 - Get messages from room
-# GET  /api/room_messages?room_hash=0x42&limit=50 - Get messages by hash
-# POST /api/room_post_message {"room_name": "General", "message": "Hello", "author_pubkey": "abc123"} - Post message
-# GET  /api/room_stats?room_name=General - Get room statistics
-# GET  /api/room_stats - Get all rooms statistics
-# GET  /api/room_clients?room_name=General - Get clients synced to room
+# GET    /api/room_messages?room_name=General&limit=50&offset=0&since_timestamp=X - Get messages from room
+# GET    /api/room_messages?room_hash=0x42&limit=50 - Get messages by room hash
+# POST   /api/room_post_message {"room_name": "General", "message": "Hello", "author_pubkey": "abc123"} - Post message
+# GET    /api/room_stats?room_name=General - Get room statistics
+# GET    /api/room_stats - Get all rooms statistics
+# GET    /api/room_clients?room_name=General - Get clients synced to room
 # DELETE /api/room_message?room_name=General&message_id=123 - Delete specific message
-# DELETE /api/room_messages?room_name=General - Clear all messages in room
+# DELETE /api/room_messages_clear?room_name=General - Clear all messages in room
 
 # Common Parameters
-# hours - Time range (default: 24)
-# resolution - 'average', 'max', 'min' (default: 'average')
-# limit - Max results (default varies)
+# hours - Time range in hours (default: 24)
+# resolution - Data resolution: 'average', 'max', 'min' (default: 'average')
+# limit - Maximum results (default varies by endpoint)
+# offset - Result offset for pagination (default: 0)
 # type - Packet type 0-15
 # route - Route type 1-3
+# ============================================================================
 
 
 
@@ -97,6 +135,9 @@ class APIEndpoints:
             config=self.config,
             daemon_instance=daemon_instance
         )
+        
+        # Create nested auth object for /api/auth/* routes
+        self.auth = AuthAPIEndpoints()
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
@@ -270,6 +311,67 @@ class APIEndpoints:
         except Exception as e:
             logger.error(f"Error setting duty cycle: {e}", exc_info=True)
             return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def update_duty_cycle_config(self):
+        self._set_cors_headers()
+        
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        
+        try:
+            self._require_post()
+            data = cherrypy.request.json or {}
+            
+            applied = []
+            
+            # Ensure config section exists
+            if "duty_cycle" not in self.config:
+                self.config["duty_cycle"] = {}
+            
+            # Update max airtime percentage
+            if "max_airtime_percent" in data:
+                percent = float(data["max_airtime_percent"])
+                if percent < 0.1 or percent > 100.0:
+                    return self._error("Max airtime percent must be 0.1-100.0")
+                # Convert percent to milliseconds per minute
+                max_airtime_ms = int((percent / 100) * 60000)
+                self.config["duty_cycle"]["max_airtime_per_minute"] = max_airtime_ms
+                applied.append(f"max_airtime={percent}%")
+            
+            # Update enforcement enabled/disabled
+            if "enforcement_enabled" in data:
+                enabled = bool(data["enforcement_enabled"])
+                self.config["duty_cycle"]["enforcement_enabled"] = enabled
+                applied.append(f"enforcement={'enabled' if enabled else 'disabled'}")
+            
+            if not applied:
+                return self._error("No valid settings provided")
+            
+            # Save to config file and live update daemon
+            result = self.config_manager.update_and_save(
+                updates={},
+                live_update=True,
+                live_update_sections=['duty_cycle']
+            )
+            
+            logger.info(f"Duty cycle config updated: {', '.join(applied)}")
+            
+            return self._success({
+                "applied": applied,
+                "persisted": result.get("saved", False),
+                "live_update": result.get("live_updated", False),
+                "restart_required": False,
+                "message": "Duty cycle settings applied immediately."
+            })
+            
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating duty cycle config: {e}")
+            return self._error(str(e))
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -1185,30 +1287,119 @@ class APIEndpoints:
             return self._error("Method not supported")
 
     @cherrypy.expose
+    @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def ping_neighbor(self):
+
         # Enable CORS for this endpoint only if configured
         self._set_cors_headers()
+        
+        # Handle OPTIONS request for CORS preflight
+        if cherrypy.request.method == "OPTIONS":
+            return ""
         
         try:
             self._require_post()
             data = cherrypy.request.json or {}
             target_id = data.get("target_id")
+            timeout = int(data.get("timeout", 10))
             
             if not target_id:
                 return self._error("Missing target_id parameter")
             
-            # TODO: Implement actual ping functionality when available
-            # For now, return success to indicate the endpoint works
-            logger.info(f"Ping request for neighbor: {target_id}")
-            return self._success({"target_id": target_id}, message="Ping sent successfully")
+            # Parse target hash (accepts hex string like "0xA5" or "a5")
+            try:
+                target_hash = int(target_id, 16) if isinstance(target_id, str) else int(target_id)
+                if target_hash < 0 or target_hash > 255:
+                    return self._error("target_id must be a valid byte (0x00-0xFF)")
+            except ValueError:
+                return self._error(f"Invalid target_id format: {target_id}")
+            
+            # Check if router and trace_helper are available
+            if not hasattr(self.daemon_instance, 'router'):
+                return self._error("Packet router not available")
+            
+            router = self.daemon_instance.router
+            if not hasattr(self.daemon_instance, 'trace_helper'):
+                return self._error("Trace helper not available")
+            
+            trace_helper = self.daemon_instance.trace_helper
+            
+            # Generate unique tag for this ping
+            import random
+            trace_tag = random.randint(0, 0xFFFFFFFF)
+            
+            # Create trace packet
+            from pymc_core.protocol import PacketBuilder
+            packet = PacketBuilder.create_trace(
+                tag=trace_tag,
+                auth_code=0x12345678,
+                flags=0x00,
+                path=[target_hash]
+            )
+            
+            # Wait for response with timeout
+            import asyncio
+            
+            async def send_and_wait():
+                """Async helper to send ping and wait for response"""
+                # Register ping with TraceHelper (must be done in async context)
+                event = trace_helper.register_ping(trace_tag, target_hash)
+                
+                # Send packet via router
+                await router.inject_packet(packet)
+                logger.info(f"Ping sent to 0x{target_hash:02x} with tag {trace_tag}")
+                
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=timeout)
+                    return True
+                except asyncio.TimeoutError:
+                    return False
+            
+            # Run the async send and wait in the daemon's event loop
+            try:
+                if self.event_loop is None:
+                    return self._error("Event loop not available")
+                
+                future = asyncio.run_coroutine_threadsafe(send_and_wait(), self.event_loop)
+                response_received = future.result(timeout=timeout + 1)
+            except Exception as e:
+                logger.error(f"Error waiting for ping response: {e}")
+                trace_helper.pending_pings.pop(trace_tag, None)
+                return self._error(f"Error waiting for response: {str(e)}")
+            
+            if response_received:
+                # Get result
+                ping_info = trace_helper.pending_pings.pop(trace_tag, None)
+                if not ping_info:
+                    return self._error("Ping info not found after response")
+                
+                result = ping_info.get('result')
+                if result:
+                    # Calculate round-trip time
+                    rtt_ms = (result['received_at'] - ping_info['sent_at']) * 1000
+                    
+                    return self._success({
+                        "target_id": f"0x{target_hash:02x}",
+                        "rtt_ms": round(rtt_ms, 2),
+                        "snr_db": result['snr'],
+                        "rssi": result['rssi'],
+                        "path": [f"0x{h:02x}" for h in result['path']],
+                        "tag": trace_tag
+                    }, message="Ping successful")
+                else:
+                    return self._error("Received response but no data")
+            else:
+                # Timeout
+                trace_helper.pending_pings.pop(trace_tag, None)
+                return self._error(f"Ping timeout after {timeout}s")
             
         except cherrypy.HTTPError:
             raise
         except Exception as e:
-            logger.error(f"Error pinging neighbor: {e}")
-            return self._error(e)
+            logger.error(f"Error pinging neighbor: {e}", exc_info=True)
+            return self._error(str(e))
 
     # ========== Identity Management Endpoints ==========
     
@@ -2776,15 +2967,42 @@ class APIEndpoints:
     @cherrypy.expose
     def docs(self):
         """Serve Swagger UI for interactive API documentation."""
-        # Load HTML template from file
-        template_path = os.path.join(os.path.dirname(__file__), 'html', 'swagger-ui.html')
-        try:
-            with open(template_path, 'r', encoding='utf-8') as f:
-                swagger_html = f.read()
-        except FileNotFoundError:
-            logger.error(f"Swagger UI template not found at {template_path}")
-            cherrypy.response.status = 500
-            return b"Swagger UI template not found"
-        
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pyMC Repeater API Documentation</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.10.0/swagger-ui.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5.10.0/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@5.10.0/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            window.ui = SwaggerUIBundle({
+                url: '/api/openapi',
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout"
+            });
+        };
+    </script>
+</body>
+</html>"""
         cherrypy.response.headers['Content-Type'] = 'text/html'
-        return swagger_html.encode('utf-8')
+        return html.encode('utf-8')

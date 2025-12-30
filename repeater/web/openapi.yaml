@@ -18,6 +18,10 @@ info:
     url: https://github.com/rightup/pyMC_Repeater
 
 servers:
+  - url: /api
+    description: Current server (relative URLs with /api prefix)
+  - url: /
+    description: Current server root (for /auth endpoints)
   - url: http://localhost:8080/api
     description: Local development server
   - url: http://{host}:8080/api
@@ -25,9 +29,11 @@ servers:
     variables:
       host:
         default: localhost
-        description: Repeater IP address
+        description: Repeater IP address or hostname
 
 tags:
+  - name: Authentication
+    description: User authentication and API token management
   - name: System
     description: System statistics and control
   - name: Packets
@@ -38,6 +44,12 @@ tags:
     description: Noise floor monitoring
   - name: CAD Calibration
     description: Channel Activity Detection calibration
+  - name: Adverts
+    description: Advertisement and contact management
+  - name: Transport Keys
+    description: Transport encryption key management
+  - name: Network Policy
+    description: Network flood policy and neighbor management
   - name: Identities
     description: Identity management
   - name: ACL
@@ -46,6 +58,237 @@ tags:
     description: Room server messaging
 
 paths:
+  # ============================================================================
+  # Authentication Endpoints
+  # ============================================================================
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: User login
+      description: Authenticate with username/password and receive JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, client_id]
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  example: admin123
+                client_id:
+                  type: string
+                  description: Unique client identifier
+                  example: web-client-abc123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+                    description: JWT token
+                  expires_in:
+                    type: integer
+                    description: Token expiry in seconds
+                  username:
+                    type: string
+        '401':
+          description: Invalid credentials
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh JWT token
+      description: Extend session by refreshing JWT token
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id]
+              properties:
+                client_id:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+                  expires_in:
+                    type: integer
+                  username:
+                    type: string
+
+  /auth/verify:
+    get:
+      tags: [Authentication]
+      summary: Verify authentication
+      description: Check if current authentication is valid
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Authentication valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  authenticated:
+                    type: boolean
+                  user:
+                    type: object
+
+  /auth/change_password:
+    post:
+      tags: [Authentication]
+      summary: Change admin password
+      description: Change the admin password (requires authentication)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                  format: password
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: Password changed successfully
+        '401':
+          description: Current password incorrect
+        '400':
+          description: Invalid password format
+
+  /auth/tokens:
+    get:
+      tags: [Authentication]
+      summary: List API tokens
+      description: Get list of all API tokens (RESTful endpoint)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: List of tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tokens:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                        last_used:
+                          type: string
+                          format: date-time
+    post:
+      tags: [Authentication]
+      summary: Create API token
+      description: Generate a new API token (RESTful endpoint)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Friendly name for the token
+                  example: "My API Token"
+      responses:
+        '200':
+          description: Token created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+                    description: The plaintext token (only shown once)
+                  token_id:
+                    type: integer
+                  name:
+                    type: string
+                  warning:
+                    type: string
+
+  /auth/tokens/{token_id}:
+    delete:
+      tags: [Authentication]
+      summary: Revoke API token
+      description: Delete/revoke an API token by ID (RESTful endpoint)
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Token revoked
+        '404':
+          description: Token not found
+
+  # ============================================================================
+  # System Endpoints
+  # ============================================================================
   /stats:
     get:
       tags: [System]
@@ -89,6 +332,83 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
         '405':
           description: Method not allowed
+
+  /logs:
+    get:
+      tags: [System]
+      summary: Get system logs
+      description: Retrieve recent system logs
+      responses:
+        '200':
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /hardware_stats:
+    get:
+      tags: [System]
+      summary: Get hardware statistics
+      description: CPU, memory, disk usage statistics
+      responses:
+        '200':
+          description: Hardware stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cpu_percent:
+                    type: number
+                  memory_percent:
+                    type: number
+                  disk_usage:
+                    type: object
+
+  /hardware_processes:
+    get:
+      tags: [System]
+      summary: Get process information
+      description: List running processes and their resource usage
+      responses:
+        '200':
+          description: Process list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /restart_service:
+    post:
+      tags: [System]
+      summary: Restart repeater service
+      description: Restart the repeater daemon service
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Service restart initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /openapi:
+    get:
+      tags: [System]
+      summary: Get OpenAPI specification
+      description: Returns the OpenAPI/Swagger specification for this API
+      responses:
+        '200':
+          description: OpenAPI spec
+          content:
+            application/json:
+              schema:
+                type: object
 
   /set_mode:
     post:
@@ -209,6 +529,66 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /update_duty_cycle_config:
+    post:
+      tags: [System]
+      summary: Update duty cycle configuration
+      description: Update detailed duty cycle timing configuration
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                on_time:
+                  type: integer
+                  description: ON time in seconds
+                off_time:
+                  type: integer
+                  description: OFF time in seconds
+            example:
+              enabled: true
+              on_time: 300
+              off_time: 60
+      responses:
+        '200':
+          description: Duty cycle config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /update_radio_config:
+    post:
+      tags: [System]
+      summary: Update radio configuration
+      description: Update LoRa radio parameters
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Radio config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ============================================================================
+  # Packet Endpoints
+  # ============================================================================
   /recent_packets:
     get:
       tags: [Packets]
@@ -253,6 +633,93 @@ paths:
         '200':
           description: Packet details
 
+  /packet_type_stats:
+    get:
+      tags: [Packets]
+      summary: Get packet type statistics
+      description: Statistics broken down by packet type
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Time range in hours
+      responses:
+        '200':
+          description: Packet type stats
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /route_stats:
+    get:
+      tags: [Packets]
+      summary: Get route statistics
+      description: Statistics broken down by route type
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Time range in hours
+      responses:
+        '200':
+          description: Route stats
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /filtered_packets:
+    get:
+      tags: [Packets]
+      summary: Get filtered packets
+      description: Retrieve packets filtered by type, route, and timestamp
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 15
+          description: Packet type filter
+        - name: route
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3
+          description: Route type filter
+        - name: start_timestamp
+          in: query
+          schema:
+            type: integer
+          description: Start timestamp (Unix)
+        - name: end_timestamp
+          in: query
+          schema:
+            type: integer
+          description: End timestamp (Unix)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 1000
+          description: Maximum results
+      responses:
+        '200':
+          description: Filtered packets
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ============================================================================
+  # Charts & RRD Endpoints
+  # ============================================================================
   /rrd_data:
     get:
       tags: [Charts]
@@ -450,6 +917,63 @@ paths:
                     items:
                       type: object
 
+  /noise_floor_stats:
+    get:
+      tags: [Noise Floor]
+      summary: Get noise floor statistics
+      description: Statistical analysis of noise floor measurements
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Time range in hours
+      responses:
+        '200':
+          description: Noise floor statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      min:
+                        type: number
+                      max:
+                        type: number
+                      avg:
+                        type: number
+                      current:
+                        type: number
+
+  /noise_floor_chart_data:
+    get:
+      tags: [Noise Floor]
+      summary: Get noise floor chart data
+      description: Formatted noise floor data for charting
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Time range in hours
+      responses:
+        '200':
+          description: Chart-ready noise floor data
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ============================================================================
+  # CAD Calibration Endpoints
+  # ============================================================================
   /cad_calibration_start:
     post:
       tags: [CAD Calibration]
@@ -505,6 +1029,271 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /save_cad_settings:
+    post:
+      tags: [CAD Calibration]
+      summary: Save CAD settings
+      description: Save calibrated CAD peak and min values to configuration
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [peak, min_val]
+              properties:
+                peak:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  description: CAD peak value
+                  example: 127
+                min_val:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  description: CAD minimum value
+                  example: 64
+      responses:
+        '200':
+          description: Settings saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /cad_calibration_stream:
+    get:
+      tags: [CAD Calibration]
+      summary: CAD calibration SSE stream
+      description: Server-Sent Events stream of calibration progress
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ============================================================================
+  # Adverts & Contacts
+  # ============================================================================
+  /adverts_by_contact_type:
+    get:
+      tags: [Adverts]
+      summary: Get adverts by contact type
+      description: Retrieve advertisements filtered by contact type
+      parameters:
+        - name: contact_type
+          in: query
+          schema:
+            type: integer
+          description: Contact type to filter by
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: Maximum number of results
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Time range in hours
+      responses:
+        '200':
+          description: Filtered adverts
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /advert:
+    get:
+      tags: [Adverts]
+      summary: Get specific advert
+      description: Retrieve details of a specific advertisement
+      parameters:
+        - name: advert_id
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Advert ID to retrieve
+      responses:
+        '200':
+          description: Advert details
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ============================================================================
+  # Transport Keys
+  # ============================================================================
+  /transport_keys:
+    get:
+      tags: [Transport Keys]
+      summary: List transport keys
+      description: Get list of all transport encryption keys
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: List of transport keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags: [Transport Keys]
+      summary: Create transport key
+      description: Generate a new transport encryption key
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Key name/identifier
+      responses:
+        '200':
+          description: Key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /transport_key:
+    get:
+      tags: [Transport Keys]
+      summary: Get transport key
+      description: Retrieve specific transport key details
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: key_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Key ID to retrieve
+      responses:
+        '200':
+          description: Key details
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      tags: [Transport Keys]
+      summary: Delete transport key
+      description: Remove a transport encryption key
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: key_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Key ID to delete
+      responses:
+        '200':
+          description: Key deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ============================================================================
+  # Network Policy
+  # ============================================================================
+  /global_flood_policy:
+    get:
+      tags: [Network Policy]
+      summary: Get global flood policy
+      description: Retrieve current network flood policy configuration
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Current policy
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      tags: [Network Policy]
+      summary: Update global flood policy
+      description: Modify network flood policy settings
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Policy updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /ping_neighbor:
+    post:
+      tags: [Network Policy]
+      summary: Ping neighbor node
+      description: Send ping to a specific neighbor node
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                node_id:
+                  type: string
+                  description: Target node identifier
+      responses:
+        '200':
+          description: Ping sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ============================================================================
+  # Identity Management
+  # ============================================================================
   /create_identity:
     post:
       tags: [Identities]
@@ -631,6 +1420,137 @@ paths:
                         items:
                           $ref: '#/components/schemas/Identity'
 
+  /identity:
+    get:
+      tags: [Identities]
+      summary: Get specific identity
+      description: Retrieve details of a specific identity by name
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Identity name to retrieve
+      responses:
+        '200':
+          description: Identity details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Identity'
+
+  /update_identity:
+    put:
+      tags: [Identities]
+      summary: Update identity
+      description: Modify an existing identity's configuration
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Current identity name
+                new_name:
+                  type: string
+                  description: New identity name (optional)
+                identity_key:
+                  type: string
+                  description: New identity key (optional)
+                settings:
+                  type: object
+                  description: Updated settings
+      responses:
+        '200':
+          description: Identity updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /delete_identity:
+    delete:
+      tags: [Identities]
+      summary: Delete identity
+      description: Remove an identity from the system
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Identity name to delete
+      responses:
+        '200':
+          description: Identity deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /send_room_server_advert:
+    post:
+      tags: [Identities]
+      summary: Send room server advertisement
+      description: Broadcast a room server advertisement packet
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Room server identity name
+                node_name:
+                  type: string
+                  description: Node name for the advertisement
+                latitude:
+                  type: number
+                  format: float
+                  description: GPS latitude
+                  example: 0.0
+                longitude:
+                  type: number
+                  format: float
+                  description: GPS longitude
+                  example: 0.0
+                disable_fwd:
+                  type: boolean
+                  description: Disable forwarding flag
+                  default: false
+      responses:
+        '200':
+          description: Advertisement sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ============================================================================
+  # ACL (Access Control List)
+  # ============================================================================
   /acl_info:
     get:
       tags: [ACL]
@@ -1520,12 +2440,16 @@ components:
           example: "0xC5"
 
   securitySchemes:
-    # Future: API key authentication
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token authentication via Authorization header
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-      description: API key authentication (not yet implemented)
+      description: API key authentication for machine-to-machine access
 
 # Future security - currently open
 # security:

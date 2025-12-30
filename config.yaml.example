@@ -52,6 +52,10 @@ repeater:
     
     # Allow read-only access for clients without password/not in ACL
     allow_read_only: false
+    
+    # JWT secret key for signing tokens (auto-generated if not provided)
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    jwt_secret: ""
 
 # Mesh Network Configuration
 mesh:

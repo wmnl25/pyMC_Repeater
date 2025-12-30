@@ -91,6 +91,16 @@ class SQLiteHandler:
                     )
                 """)
                 
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS api_tokens (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        token_hash TEXT NOT NULL UNIQUE,
+                        created_at REAL NOT NULL,
+                        last_used REAL
+                    )
+                """)
+                
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_packets_timestamp ON packets(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_packets_type ON packets(type)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_packets_hash ON packets(packet_hash)")
@@ -209,10 +219,117 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
                 
+                # Migration 3: Add api_tokens table
+                migration_name = "add_api_tokens_table"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,)
+                ).fetchone()
+                
+                if not existing:
+                    # Check if api_tokens table already exists
+                    cursor = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='api_tokens'"
+                    )
+                    
+                    if not cursor.fetchone():
+                        conn.execute("""
+                            CREATE TABLE api_tokens (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                name TEXT NOT NULL,
+                                token_hash TEXT NOT NULL UNIQUE,
+                                created_at REAL NOT NULL,
+                                last_used REAL
+                            )
+                        """)
+                        logger.info("Created api_tokens table")
+                    
+                    # Mark migration as applied
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time())
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+                
                 conn.commit()
                 
         except Exception as e:
             logger.error(f"Failed to run migrations: {e}")
+
+    # API Token methods
+    def create_api_token(self, name: str, token_hash: str) -> int:
+        """Create a new API token entry"""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                cursor = conn.execute(
+                    "INSERT INTO api_tokens (name, token_hash, created_at) VALUES (?, ?, ?)",
+                    (name, token_hash, time.time())
+                )
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Failed to create API token: {e}")
+            raise
+    
+    def verify_api_token(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        """Verify API token and update last_used timestamp"""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                cursor = conn.execute(
+                    "SELECT id, name, created_at FROM api_tokens WHERE token_hash = ?",
+                    (token_hash,)
+                )
+                row = cursor.fetchone()
+                
+                if row:
+                    token_id, name, created_at = row
+                    
+                    # Update last_used timestamp
+                    conn.execute(
+                        "UPDATE api_tokens SET last_used = ? WHERE id = ?",
+                        (time.time(), token_id)
+                    )
+                    conn.commit()
+                    
+                    return {
+                        'id': token_id,
+                        'name': name,
+                        'created_at': created_at
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Failed to verify API token: {e}")
+            return None
+    
+    def revoke_api_token(self, token_id: int) -> bool:
+        """Revoke (delete) an API token"""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to revoke API token: {e}")
+            return False
+    
+    def list_api_tokens(self) -> List[Dict[str, Any]]:
+        """List all API tokens (without sensitive data)"""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                cursor = conn.execute(
+                    "SELECT id, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
+                )
+                
+                tokens = []
+                for row in cursor.fetchall():
+                    tokens.append({
+                        'id': row[0],
+                        'name': row[1],
+                        'created_at': row[2],
+                        'last_used': row[3]
+                    })
+                return tokens
+        except Exception as e:
+            logger.error(f"Failed to list API tokens: {e}")
+            return []
 
     def store_packet(self, record: dict):
         try:
