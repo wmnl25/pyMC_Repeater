@@ -109,7 +109,8 @@ class StatsApp:
         # Path to the compiled Vue.js application
         # Use web_path from config if provided, otherwise use default
         default_html_dir = os.path.join(os.path.dirname(__file__), "html")
-        self.html_dir = self.config.get("web", {}).get("web_path", default_html_dir)
+        web_path = self.config.get("web", {}).get("web_path")
+        self.html_dir = web_path if web_path is not None else default_html_dir
 
         # Create nested API object for routing
         self.api = APIEndpoints(stats_getter, send_advert_func, self.config, event_loop, daemon_instance, config_path)
@@ -254,7 +255,8 @@ class HTTPStatsServer:
             
 
             default_html_dir = os.path.join(os.path.dirname(__file__), "html")
-            html_dir = self.config.get("web", {}).get("web_path", default_html_dir)
+            web_path = self.config.get("web", {}).get("web_path")
+            html_dir = web_path if web_path is not None else default_html_dir
             
             assets_dir = os.path.join(html_dir, "assets")
             next_dir = os.path.join(html_dir, "_next")
