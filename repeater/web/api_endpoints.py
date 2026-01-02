@@ -736,6 +736,11 @@ class APIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def filtered_packets(self):
+        # Handle OPTIONS request for CORS preflight
+        if cherrypy.request.method == "OPTIONS":
+            self._set_cors_headers()
+            return ""
+            
         try:
             params = self._get_params({
                 'type': None,
