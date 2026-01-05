@@ -218,9 +218,10 @@ class HTTPStatsServer:
                 except Exception as e:
                     logger.error(f"Failed to save JWT secret to config: {e}")
         
-        # Initialize JWT handler (15 minute expiry)
-        self.jwt_handler = JWTHandler(jwt_secret, expiry_minutes=15)
-        logger.info("JWT handler initialized")
+        # Initialize JWT handler with configurable expiry (default 1 hour)
+        jwt_expiry_minutes = security_config.get("jwt_expiry_minutes", 60)
+        self.jwt_handler = JWTHandler(jwt_secret, expiry_minutes=jwt_expiry_minutes)
+        logger.info(f"JWT handler initialized (token expiry: {jwt_expiry_minutes} minutes)")
         
         # Initialize API token manager
         storage_dir = self.config.get("storage", {}).get("storage_dir", ".")

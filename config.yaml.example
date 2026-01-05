@@ -56,6 +56,10 @@ repeater:
     # JWT secret key for signing tokens (auto-generated if not provided)
     # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
     jwt_secret: ""
+    
+    # JWT token expiry time in minutes (default: 60 minutes / 1 hour)
+    # Controls how long users stay logged in before needing to re-authenticate
+    jwt_expiry_minutes: 60
 
 # Mesh Network Configuration
 mesh:
@@ -171,7 +175,11 @@ mqtt:
   
   # MQTT broker settings
   broker: "localhost"
-  port: 1883  # Use 8883 for TLS/SSL
+  port: 1883  # Use 8883 for TLS/SSL, 80/443/9001 for WebSockets
+  
+  # Use WebSocket transport instead of standard TCP
+  # Typically uses ports: 80 (ws://), 443 (wss://), or 9001
+  use_websockets: false
   
   # Authentication (optional)
   username: null

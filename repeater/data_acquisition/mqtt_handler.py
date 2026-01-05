@@ -29,7 +29,12 @@ class MQTTHandler:
             return
             
         try:
-            self.client = mqtt.Client()
+            # Use WebSocket transport if configured, otherwise use standard TCP
+            transport = "websockets" if self.mqtt_config.get("use_websockets", False) else "tcp"
+            self.client = mqtt.Client(transport=transport)
+            
+            if transport == "websockets":
+                logger.info("Using WebSocket transport for MQTT")
             
             # Configure TLS/SSL if enabled
             tls_config = self.mqtt_config.get("tls", {})
@@ -71,11 +76,12 @@ class MQTTHandler:
             broker = self.mqtt_config.get("broker", "localhost")
             port = self.mqtt_config.get("port", 1883)
             
+            secure = "(TLS)" if tls_config.get("enabled", False) else ""
+            logger.info(f"Connecting to MQTT broker {broker}:{port} {secure}...")
+            
             self.client.connect(broker, port, 60)
             self.client.loop_start()
-            
-            secure = "(TLS)" if tls_config.get("enabled", False) else ""
-            logger.info(f"MQTT client connected to {broker}:{port} {secure}")
+            logger.info(f"MQTT client successfully connected")
             
         except Exception as e:
             logger.error(f"Failed to initialize MQTT: {e}")
