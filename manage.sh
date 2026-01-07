@@ -221,14 +221,22 @@ install_repeater() {
         wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" && chmod +x /usr/local/bin/yq
     fi
     
+    echo "28"; echo "# Generating version file..."
+    cd "$SCRIPT_DIR"
+    # Generate version file using setuptools_scm before copying
+    if [ -d .git ]; then
+        git fetch --tags 2>/dev/null || true
+        python3 -m setuptools_scm 2>/dev/null || true
+    fi
+    
     echo "30"; echo "# Installing files..."
     cp -r "$SCRIPT_DIR/repeater" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/README.md" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/manage.sh" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/pymc-repeater.service" "$INSTALL_DIR/" 2>/dev/null || true
-    # Note: Radio configuration is now done via web UI, not bash script
     cp "$SCRIPT_DIR/radio-settings.json" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/radio-presets.json" "$INSTALL_DIR/" 2>/dev/null || true
     
     echo "45"; echo "# Installing configuration..."
     cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml.example"
@@ -378,11 +386,23 @@ upgrade_repeater() {
         fi
         echo "    ✓ Dependencies updated"
         
+        echo "[3.5/9] Generating version file..."
+        SCRIPT_DIR="$(dirname "$0")"
+        cd "$SCRIPT_DIR"
+        # Generate version file using setuptools_scm before copying
+        if [ -d .git ]; then
+            git fetch --tags 2>/dev/null || true
+            python3 -m setuptools_scm 2>/dev/null || true
+        fi
+        echo "    ✓ Version file generated"
+        
         echo "[4/9] Installing new files..."
         cp -r repeater "$INSTALL_DIR/" 2>/dev/null || true
         cp pyproject.toml "$INSTALL_DIR/" 2>/dev/null || true
         cp README.md "$INSTALL_DIR/" 2>/dev/null || true
         cp pymc-repeater.service /etc/systemd/system/ 2>/dev/null || true
+        cp radio-settings.json "$INSTALL_DIR/" 2>/dev/null || true
+        cp radio-presets.json "$INSTALL_DIR/" 2>/dev/null || true
         echo "    ✓ Files updated"
         
         echo "[5/9] Validating and updating configuration..."
