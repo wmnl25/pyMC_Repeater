@@ -1,8 +1,8 @@
 #!/bin/bash
-# Convert MeshCore firmware 64-byte private key to pyMC_Repeater 32-byte seed format
+# Convert MeshCore firmware 64-byte private key to pyMC_Repeater format
 #
 # Usage: sudo ./convert_firmware_key.sh <64-byte-hex-key> [config-path]
-# Example: sudo ./convert_firmware_key.sh 681b98730e826d3140f9ac02e94e3de14163418a4a8e069bf8c6fb275bf07e6a7c05b788f5eba746ab0deb613b7502ee316346f7886fbfde56180d3aaaa98033
+# Example: sudo ./convert_firmware_key.sh 987BDA619630197351F2B3040FD19B2EE0DEE357DD69BBEEE295786FA78A4D5F298B0BF1B7DE73CBC23257CDB2C562F5033DF58C232916432948B0F6BA4448F2
 
 set -e
 
@@ -11,21 +11,19 @@ if [ $# -eq 0 ]; then
     echo ""
     echo "Usage: sudo $0 <64-byte-hex-key> [config-path]"
     echo ""
-    echo "This script converts a 64-byte MeshCore firmware private key to the"
-    echo "32-byte seed format used by pyMC_Repeater and updates config.yaml."
+    echo "This script imports a 64-byte MeshCore firmware private key into"
+    echo "pyMC_Repeater config.yaml for full identity compatibility."
     echo ""
-    echo "The 64-byte key is SHA-512(seed), where:"
-    echo "  - First 32 bytes: Ed25519 scalar (used for public key derivation)"
-    echo "  - Last 32 bytes: Nonce seed (used for signature generation)"
-    echo ""
-    echo "IMPORTANT: The conversion is ONE-WAY. You cannot recover the original"
-    echo "seed from the 64-byte key. This script extracts the scalar portion."
+    echo "The 64-byte key format: [32-byte scalar][32-byte nonce]"
+    echo "  - Enables same node address as firmware device"
+    echo "  - Supports signing using MeshCore/orlp ed25519 algorithm"
+    echo "  - Fully compatible with pyMC_core LocalIdentity"
     echo ""
     echo "Arguments:"
     echo "  config-path: Optional path to config.yaml (default: /etc/pymc_repeater/config.yaml)"
     echo ""
     echo "Example:"
-    echo "  sudo $0 681b98730e826d3140f9ac02e94e3de14163418a4a8e069bf8c6fb275bf07e6a7c05b788f5eba746ab0deb613b7502ee316346f7886fbfde56180d3aaaa98033"
+    echo "  sudo $0 987BDA619630197351F2B3040FD19B2EE0DEE357DD69BBEEE295786FA78A4D5F298B0BF1B7DE73CBC23257CDB2C562F5033DF58C232916432948B0F6BA4448F2"
     exit 1
 fi
 
@@ -51,12 +49,6 @@ if [ "$KEY_LEN" -ne 128 ]; then
     exit 1
 fi
 
-# Extract first 32 bytes (64 hex chars) - this is the Ed25519 scalar
-SEED_HEX="${FULL_KEY:0:64}"
-
-# Convert to base64 for Python repeater (using Python since xxd may not be installed)
-SEED_BASE64=$(python3 -c "import binascii, base64; print(base64.b64encode(binascii.unhexlify('$SEED_HEX')).decode())")
-
 # Get config path
 CONFIG_PATH="${2:-/etc/pymc_repeater/config.yaml}"
 
@@ -66,91 +58,90 @@ if [ ! -f "$CONFIG_PATH" ]; then
     exit 1
 fi
 
-echo "=== MeshCore Firmware Key Conversion ==="
+echo "=== MeshCore Firmware Key Import ==="
 echo ""
 echo "Input (64-byte firmware key):"
-echo "  Full key:    $FULL_KEY"
-echo ""
-echo "Extracted Ed25519 scalar (first 32 bytes):"
-echo "  Hex:         $SEED_HEX"
-echo "  Base64:      $SEED_BASE64"
+echo "  $FULL_KEY"
 echo ""
 
-# Verify public key derivation
-echo "Verifying public key derivation..."
-PUBLIC_KEY=$(python3 -c "
-from nacl.bindings import crypto_scalarmult_ed25519_base
-import binascii
-seed = binascii.unhexlify('$SEED_HEX')
-pub = crypto_scalarmult_ed25519_base(seed)
-print(pub.hex())
-" 2>/dev/null)
+# Verify public key derivation and import key using Python with safe YAML handling
+python3 <<EOF
+import sys
+import yaml
+import base64
+import hashlib
+from pathlib import Path
 
-if [ $? -eq 0 ]; then
-    echo "  Public key:  $PUBLIC_KEY"
-    PUBLIC_HASH=$(python3 -c "print('0x' + '$PUBLIC_KEY'[:2])")
-    echo "  Node hash:   $PUBLIC_HASH"
-    echo ""
-else
-    echo "  Warning: Could not verify public key (PyNaCl not installed)"
-    echo ""
+# Import the key
+key_hex = "$FULL_KEY"
+key_bytes = bytes.fromhex(key_hex)
+
+# Verify with pyMC if available
+try:
+    from nacl.bindings import crypto_scalarmult_ed25519_base_noclamp
+    
+    scalar = key_bytes[:32]
+    pubkey = crypto_scalarmult_ed25519_base_noclamp(scalar)
+    
+    print(f"Derived public key: {pubkey.hex()}")
+    
+    # Calculate address (first byte of SHA256 of pubkey)
+    address = hashlib.sha256(pubkey).digest()[0]
+    print(f"Node address: 0x{address:02x}")
+    print()
+    
+except ImportError:
+    print("Warning: PyNaCl not available, skipping verification")
+    print()
+
+# Load config
+config_path = Path("$CONFIG_PATH")
+try:
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+except Exception as e:
+    print(f"Error loading config: {e}")
+    sys.exit(1)
+
+# Check for existing key
+if 'mesh' in config and 'identity_key' in config['mesh']:
+    existing = config['mesh']['identity_key']
+    if isinstance(existing, bytes):
+        print(f"WARNING: Existing identity_key found ({len(existing)} bytes)")
+    else:
+        print(f"WARNING: Existing identity_key found")
+    print()
+
+# Ensure mesh section exists
+if 'mesh' not in config:
+    config['mesh'] = {}
+
+# Store the full 64-byte key
+config['mesh']['identity_key'] = key_bytes
+
+# Save config atomically
+backup_path = f"{config_path}.backup.{Path(config_path).stat().st_mtime_ns}"
+import shutil
+shutil.copy2(config_path, backup_path)
+print(f"Created backup: {backup_path}")
+
+try:
+    with open(config_path, 'w') as f:
+        yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True)
+    print(f"✓ Successfully updated {config_path}")
+    print()
+except Exception as e:
+    print(f"Error writing config: {e}")
+    shutil.copy2(backup_path, config_path)
+    print(f"Restored from backup")
+    sys.exit(1)
+
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Error: Python script failed"
+    exit 1
 fi
-
-# Check if identity_key already exists in config
-EXISTING_KEY=$(grep -E "^\s*identity_key:" "$CONFIG_PATH" 2>/dev/null || true)
-if [ -n "$EXISTING_KEY" ]; then
-    echo "WARNING: An identity_key already exists in config.yaml"
-    echo "Current: $EXISTING_KEY"
-    echo ""
-fi
-
-# Ask for confirmation
-echo "Target: $CONFIG_PATH"
-read -p "Update config.yaml with this identity key? (yes/no): " CONFIRM
-if [ "$CONFIRM" != "yes" ]; then
-    echo "Aborted."
-    exit 0
-fi
-
-# Create backup
-BACKUP_PATH="${CONFIG_PATH}.backup.$(date +%Y%m%d_%H%M%S)"
-cp "$CONFIG_PATH" "$BACKUP_PATH"
-echo "Created backup: $BACKUP_PATH"
-
-# Update config.yaml
-# First, try to update existing identity_key (commented or not)
-if grep -qE "^\s*#?\s*identity_key:" "$CONFIG_PATH"; then
-    # Replace existing identity_key line
-    sed -i.tmp "/^\s*#\?\s*identity_key:/c\  identity_key: !!binary |\n    $SEED_BASE64" "$CONFIG_PATH"
-    # Clean up any orphaned base64 value lines from old commented key
-    sed -i.tmp '/^\s*#\s*[A-Za-z0-9+/=]\{40,\}$/d' "$CONFIG_PATH"
-    rm -f "${CONFIG_PATH}.tmp"
-    echo "✓ Updated existing identity_key in config.yaml"
-else
-    # Add identity_key to mesh section
-    if grep -q "^mesh:" "$CONFIG_PATH"; then
-        # Insert after mesh: line
-        sed -i.tmp "/^mesh:/a\  identity_key: !!binary |\n    $SEED_BASE64" "$CONFIG_PATH"
-        rm -f "${CONFIG_PATH}.tmp"
-        echo "✓ Added identity_key to mesh section in config.yaml"
-    else
-        echo "Error: Could not find 'mesh:' section in config.yaml"
-        echo "Please add manually:"
-        echo ""
-        echo "mesh:"
-        echo "  identity_key: !!binary |"
-        echo "    $SEED_BASE64"
-        exit 1
-    fi
-fi
-
-echo ""
-echo "✓ Successfully updated config.yaml"
-echo ""
-
-# Offer to restart service
-if systemctl is-active --quiet pymc-repeater 2>/dev/null; then
-    read -p "Restart pymc-repeater service now? (yes/no): " RESTART
     if [ "$RESTART" = "yes" ]; then
         systemctl restart pymc-repeater
         echo "✓ Service restarted"
