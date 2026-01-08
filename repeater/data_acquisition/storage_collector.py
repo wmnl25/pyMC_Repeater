@@ -33,8 +33,8 @@ class StorageCollector:
         self.letsmesh_handler = None
         if config.get("letsmesh", {}).get("enabled", False) and local_identity:
             try:
-                # Get keys from local_identity (signing_key.encode() is the private key seed)
-                private_key_hex = local_identity.signing_key.encode().hex()
+                # Get keys from local_identity (works for both standard and firmware keys)
+                private_key_hex = local_identity.get_signing_key_bytes().hex()
                 public_key_hex = local_identity.get_public_key().hex()
 
                 self.letsmesh_handler = MeshCoreToMqttJwtPusher(
