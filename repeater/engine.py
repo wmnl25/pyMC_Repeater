@@ -45,7 +45,7 @@ class RepeaterHandler(BaseHandler):
         self.send_advert_func = send_advert_func
         self.airtime_mgr = AirtimeManager(config)
         self.seen_packets = OrderedDict()
-        self.cache_ttl = config.get("repeater", {}).get("cache_ttl", 60)
+        self.cache_ttl = config.get("repeater", {}).get("cache_ttl", 3600)  # 1 hour
         self.max_cache_size = 1000
         self.tx_delay_factor = config.get("delays", {}).get("tx_delay_factor", 1.0)
         self.direct_tx_delay_factor = config.get("delays", {}).get("direct_tx_delay_factor", 0.5)
