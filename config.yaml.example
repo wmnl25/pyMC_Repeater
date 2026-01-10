@@ -15,7 +15,7 @@ repeater:
   identity_file: null
 
   # Duplicate packet cache TTL in seconds
-  cache_ttl: 60
+  cache_ttl: 3600
 
   # Score-based transmission filtering
   # Enable quality-based packet filtering and adaptive delays
