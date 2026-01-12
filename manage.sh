@@ -294,6 +294,9 @@ EOF
     SCRIPT_DIR="$(dirname "$0")"
     cd "$SCRIPT_DIR"
     
+    # Suppress pip root user warnings
+    export PIP_ROOT_USER_ACTION=ignore
+    
     # Calculate version from git for setuptools_scm
     if [ -d .git ]; then
         git fetch --tags 2>/dev/null || true
@@ -458,6 +461,9 @@ EOF
         # Install from source directory to properly resolve Git dependencies
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
+        
+        # Suppress pip root user warnings
+        export PIP_ROOT_USER_ACTION=ignore
         
         # First, upgrade the package and dependencies (only updates what needs updating)
         if python3 -m pip install --break-system-packages --upgrade --no-cache-dir .; then
