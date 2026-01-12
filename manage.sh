@@ -459,12 +459,36 @@ EOF
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
         
-        if python3 -m pip install --break-system-packages --force-reinstall --no-cache-dir --ignore-installed .; then
+        # First, upgrade the package and dependencies (only updates what needs updating)
+        if python3 -m pip install --break-system-packages --upgrade --no-cache-dir .; then
             echo ""
-            echo "✓ Python package update completed successfully!"
+            echo "✓ Package and dependencies updated successfully!"
         else
             echo ""
-            echo "⚠ Python package update failed, but continuing..."
+            echo "⚠ Package update failed, but continuing..."
+        fi
+        
+        # Force reinstall pymc_core to ensure it's always updated
+        # Extract the pymc_core dependency from pyproject.toml
+        echo ""
+        echo "Ensuring pymc_core is up to date..."
+        PYMC_CORE_DEP=$(grep -oP '"pymc_core\[hardware\][^"]*"' pyproject.toml 2>/dev/null | tr -d '"' || echo "")
+        if [ -n "$PYMC_CORE_DEP" ]; then
+            # Check if it's a Git URL (contains @)
+            if [[ "$PYMC_CORE_DEP" == *" @ "* ]]; then
+                # Extract just the URL part after " @ "
+                PYMC_CORE_SPEC="${PYMC_CORE_DEP#* @ }"
+            else
+                # Just the package name, use as-is
+                PYMC_CORE_SPEC="$PYMC_CORE_DEP"
+            fi
+            if python3 -m pip install --break-system-packages --force-reinstall --no-cache-dir --no-deps "$PYMC_CORE_SPEC"; then
+                echo "✓ pymc_core updated successfully!"
+            else
+                echo "⚠ pymc_core update failed, but continuing..."
+            fi
+        else
+            echo "⚠ Could not find pymc_core dependency in pyproject.toml"
         fi
         
         echo "[8/9] Starting service..."
