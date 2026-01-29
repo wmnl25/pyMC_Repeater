@@ -344,8 +344,6 @@ EOF
         echo "Please check the error messages above and try again."
         read -p "Press Enter to continue..." || true
     fi
-    systemctl daemon-reload
-    systemctl start "$SERVICE_NAME"
     
     # Show final results
     sleep 2
