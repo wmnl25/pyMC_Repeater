@@ -111,8 +111,8 @@
       "use_dio2_rf": true,
       "preamble_length": 17
     },
-    "femtofox-SX": {
-      "name": "FemtoFox SX1262",
+    "femtofox-1W-SX": {
+      "name": "FemtoFox SX1262 (1W)",
       "bus_id": 0,
       "cs_id": 0,
       "cs_pin": 16,
