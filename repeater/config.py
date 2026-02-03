@@ -197,9 +197,18 @@ def _load_or_create_identity_key(path: Optional[str] = None) -> bytes:
 
 def get_radio_for_board(board_config: dict):
 
+    def _parse_int(value, *, default=None) -> int:
+        if value is None:
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            return int(value.strip(), 0)
+        raise ValueError(f"Invalid int value type: {type(value)}")
+
     radio_type = board_config.get("radio_type", "sx1262").lower()
 
-    if radio_type == "sx1262":
+    if radio_type in ("sx1262", "sx1262_ch341"):
         from pymc_core.hardware.sx1262_wrapper import SX1262Radio
 
         # Get radio and SPI configuration - all settings must be in config file
@@ -211,7 +220,22 @@ def get_radio_for_board(board_config: dict):
         if not radio_config:
             raise ValueError("Missing 'radio' section in configuration file")
 
-        # Build config with required fields - no defaults
+        # CH341 integration: swap SPI transport + GPIO backend to CH341
+        if radio_type == "sx1262_ch341":
+            ch341_cfg = board_config.get("ch341")
+            if not ch341_cfg:
+                raise ValueError("Missing 'ch341' section in configuration file")
+
+            from pymc_core.hardware.lora.LoRaRF.SX126x import set_spi_transport
+            from pymc_core.hardware.transports.ch341_spi_transport import CH341SPITransport
+
+            vid = _parse_int(ch341_cfg.get("vid"), default=0x1A86)
+            pid = _parse_int(ch341_cfg.get("pid"), default=0x5512)
+
+            # Create CH341 transport (also configures CH341 GPIO manager globally)
+            ch341_spi = CH341SPITransport(vid=vid, pid=pid, auto_setup_gpio=True)
+            set_spi_transport(ch341_spi)
+
         combined_config = {
             "bus_id": spi_config["bus_id"],
             "cs_id": spi_config["cs_id"],
@@ -224,6 +248,7 @@ def get_radio_for_board(board_config: dict):
             "txled_pin": spi_config.get("txled_pin", -1),
             "rxled_pin": spi_config.get("rxled_pin", -1),
             "use_dio3_tcxo": spi_config.get("use_dio3_tcxo", False),
+            "dio3_tcxo_voltage": float(spi_config.get("dio3_tcxo_voltage", 1.8)),
             "use_dio2_rf": spi_config.get("use_dio2_rf", False),
             "is_waveshare": spi_config.get("is_waveshare", False),
             "frequency": int(radio_config["frequency"]),
@@ -245,5 +270,6 @@ def get_radio_for_board(board_config: dict):
 
         return radio
 
-    else:
-        raise RuntimeError(f"Unknown radio type: {radio_type}. Supported: sx1262")
+    raise RuntimeError(
+        f"Unknown radio type: {radio_type}. Supported: sx1262, sx1262_ch341"
+    )
