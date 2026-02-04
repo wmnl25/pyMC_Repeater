@@ -19,7 +19,8 @@ class StorageCollector:
     def __init__(self, config: dict, local_identity=None, repeater_handler=None):
         self.config = config
         self.repeater_handler = repeater_handler
-        self.storage_dir = Path(config.get("storage_dir", "/var/lib/pymc_repeater"))
+        storage_cfg = config.get("storage", {})
+        self.storage_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         node_name = config.get("repeater", {}).get("node_name", "unknown")

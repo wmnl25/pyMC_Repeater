@@ -56,7 +56,11 @@ class RepeaterDaemon:
             logger.info("Initializing radio hardware...")
             try:
                 self.radio = get_radio_for_board(self.config)
-                
+
+                # KISS modem: schedule RX callbacks on the event loop for thread safety
+                if hasattr(self.radio, "set_event_loop"):
+                    self.radio.set_event_loop(asyncio.get_running_loop())
+
                 if hasattr(self.radio, 'set_custom_cad_thresholds'):
                     # Load CAD settings from config, with defaults
                     cad_config = self.config.get("radio", {}).get("cad", {})

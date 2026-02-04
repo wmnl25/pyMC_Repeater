@@ -232,20 +232,17 @@ class APIEndpoints:
     def needs_setup(self):
         """Check if the repeater needs initial setup configuration"""
         try:
-            # Check if config has default values that indicate first-time setup
             config = self.config
-            
-            # Check for default node name
+
+            # Check for default values that indicate first-time setup
             node_name = config.get('repeater', {}).get('node_name', '')
             has_default_name = node_name in ['mesh-repeater-01', '']
-            
-            # Check for default admin password
+
             admin_password = config.get('repeater', {}).get('security', {}).get('admin_password', '')
             has_default_password = admin_password in ['admin123', '']
-            
-            # Needs setup if either condition is true
+
             needs_setup = has_default_name or has_default_password
-            
+
             return {'needs_setup': needs_setup, 'reasons': {
                 'default_name': has_default_name,
                 'default_password': has_default_password
@@ -262,32 +259,35 @@ class APIEndpoints:
             import json
 
             # Check config-based location first, then development location
-            config_dir = Path(self.config.get("storage_dir", "/var/lib/pymc_repeater"))
+            storage_cfg = self.config.get("storage", {})
+            config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
             installed_path = config_dir / 'radio-settings.json'
             dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
             
             hardware_file = str(installed_path) if installed_path.exists() else dev_path
-            
-            if not os.path.exists(hardware_file):
-                logger.error(f"Hardware file not found. Tried: {installed_path}, {dev_path}")
-                return {'error': 'Hardware configuration file not found', 'hardware': []}
-            
-            with open(hardware_file, 'r') as f:
-                hardware_data = json.load(f)
-            
-            # Parse hardware options from the "hardware" key
             hardware_list = []
-            hardware_configs = hardware_data.get('hardware', {})
-            
-            for hw_key, hw_config in hardware_configs.items():
-                if isinstance(hw_config, dict):
-                    hardware_list.append({
-                        'key': hw_key,
-                        'name': hw_config.get('name', hw_key),
-                        'description': hw_config.get('description', ''),
-                        'config': hw_config
-                    })
-            
+
+            if os.path.exists(hardware_file):
+                with open(hardware_file, 'r') as f:
+                    hardware_data = json.load(f)
+                hardware_configs = hardware_data.get('hardware', {})
+                for hw_key, hw_config in hardware_configs.items():
+                    if isinstance(hw_config, dict):
+                        hardware_list.append({
+                            'key': hw_key,
+                            'name': hw_config.get('name', hw_key),
+                            'description': hw_config.get('description', ''),
+                            'config': hw_config
+                        })
+
+            # Add MeshCore KISS modem option (serial TNC)
+            hardware_list.append({
+                'key': 'kiss',
+                'name': 'KISS modem (serial)',
+                'description': 'MeshCore KISS modem over serial – requires pyMC_core with KISS support',
+                'config': {}
+            })
+
             return {'hardware': hardware_list}
         except Exception as e:
             logger.error(f"Error loading hardware options: {e}")
@@ -301,7 +301,8 @@ class APIEndpoints:
             import json
             
             # Check config-based location first, then development location
-            config_dir = Path(self.config.get("storage_dir", "/var/lib/pymc_repeater"))
+            storage_cfg = self.config.get("storage", {})
+            config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
             installed_path = config_dir / 'radio-presets.json'
             dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-presets.json')
             
@@ -351,105 +352,100 @@ class APIEndpoints:
             if not admin_password or len(admin_password) < 6:
                 return {'success': False, 'error': 'Admin password must be at least 6 characters'}
             
-            # Load hardware configuration - check installed path first, then dev path
             import json
-            config_dir = Path(self.config.get("storage_dir", "/var/lib/pymc_repeater"))
-            installed_path = config_dir / 'radio-settings.json'
-            dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
-            
-            hardware_file = str(installed_path) if installed_path.exists() else dev_path
-            
-            if not os.path.exists(hardware_file):
-                logger.error(f"Hardware file not found. Tried: {installed_path}, {dev_path}")
-                return {'success': False, 'error': 'Hardware configuration file not found'}
-            
-            with open(hardware_file, 'r') as f:
-                hardware_data = json.load(f)
-            
-            # Get hardware config from nested "hardware" key
-            hardware_configs = hardware_data.get('hardware', {})
-            hw_config = hardware_configs.get(hardware_key, {})
-            if not hw_config:
-                return {'success': False, 'error': f'Hardware configuration not found: {hardware_key}'}
-            
-            # Prepare configuration updates
             import yaml
-            
-            # Read current config
+
+            # Read current config first so we can update it
             with open(self._config_path, 'r') as f:
                 config_yaml = yaml.safe_load(f)
-            
+
             # Update repeater settings
             if 'repeater' not in config_yaml:
                 config_yaml['repeater'] = {}
             config_yaml['repeater']['node_name'] = node_name
-            
+
             if 'security' not in config_yaml['repeater']:
                 config_yaml['repeater']['security'] = {}
             config_yaml['repeater']['security']['admin_password'] = admin_password
-            
-            # Update radio settings - convert MHz/kHz to Hz
+
+            # Update radio settings - convert MHz/kHz to Hz (used for both SX1262 and KISS modem)
             if 'radio' not in config_yaml:
                 config_yaml['radio'] = {}
-            
             freq_mhz = float(radio_preset.get('frequency', 0))
             bw_khz = float(radio_preset.get('bandwidth', 0))
-            
             config_yaml['radio']['frequency'] = int(freq_mhz * 1000000)
             config_yaml['radio']['spreading_factor'] = int(radio_preset.get('spreading_factor', 7))
             config_yaml['radio']['bandwidth'] = int(bw_khz * 1000)
             config_yaml['radio']['coding_rate'] = int(radio_preset.get('coding_rate', 5))
-            
-            # Handle hardware-specific TX power (can be overridden by user later)
-            if 'tx_power' in hw_config:
-                config_yaml['radio']['tx_power'] = hw_config.get('tx_power', 22)
-            
-            # Handle preamble length (goes in radio section)
-            if 'preamble_length' in hw_config:
-                config_yaml['radio']['preamble_length'] = hw_config.get('preamble_length', 17)
-            
-            # Update hardware-specific settings under sx1262 section
-            if 'sx1262' not in config_yaml:
-                config_yaml['sx1262'] = {}
-            
-            # SPI configuration
-            if 'bus_id' in hw_config:
-                config_yaml['sx1262']['bus_id'] = hw_config.get('bus_id', 0)
-            if 'cs_id' in hw_config:
-                config_yaml['sx1262']['cs_id'] = hw_config.get('cs_id', 0)
-            
-            # Pin configuration
-            if 'reset_pin' in hw_config:
-                config_yaml['sx1262']['reset_pin'] = hw_config.get('reset_pin', 22)
-            if 'busy_pin' in hw_config:
-                config_yaml['sx1262']['busy_pin'] = hw_config.get('busy_pin', 17)
-            if 'irq_pin' in hw_config:
-                config_yaml['sx1262']['irq_pin'] = hw_config.get('irq_pin', 16)
-            if 'txen_pin' in hw_config:
-                config_yaml['sx1262']['txen_pin'] = hw_config.get('txen_pin', -1)
-            if 'rxen_pin' in hw_config:
-                config_yaml['sx1262']['rxen_pin'] = hw_config.get('rxen_pin', -1)
-            if 'cs_pin' in hw_config:
-                config_yaml['sx1262']['cs_pin'] = hw_config.get('cs_pin', -1)
-            if 'txled_pin' in hw_config:
-                config_yaml['sx1262']['txled_pin'] = hw_config.get('txled_pin', -1)
-            if 'rxled_pin' in hw_config:
-                config_yaml['sx1262']['rxled_pin'] = hw_config.get('rxled_pin', -1)
-            
-            # Hardware flags
-            if 'use_dio3_tcxo' in hw_config:
-                config_yaml['sx1262']['use_dio3_tcxo'] = hw_config.get('use_dio3_tcxo', False)
-            if 'use_dio2_rf' in hw_config:
-                config_yaml['sx1262']['use_dio2_rf'] = hw_config.get('use_dio2_rf', False)
-            if 'is_waveshare' in hw_config:
-                config_yaml['sx1262']['is_waveshare'] = hw_config.get('is_waveshare', False)
-            
+
+            if hardware_key == 'kiss':
+                # KISS modem: set radio_type and kiss section (port/baud from request or defaults)
+                config_yaml['radio_type'] = 'kiss'
+                kiss_port = (data.get('kiss_port') or '').strip() or '/dev/ttyUSB0'
+                kiss_baud = int(data.get('kiss_baud_rate', data.get('kiss_baud', 115200)))
+                config_yaml['kiss'] = {'port': kiss_port, 'baud_rate': kiss_baud}
+                config_yaml['radio']['tx_power'] = int(radio_preset.get('tx_power', 14))
+                if 'preamble_length' not in config_yaml['radio']:
+                    config_yaml['radio']['preamble_length'] = 17
+            else:
+                # SX1262: load hardware config from radio-settings.json
+                storage_cfg = self.config.get("storage", {})
+                config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
+                installed_path = config_dir / 'radio-settings.json'
+                dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+                hardware_file = str(installed_path) if installed_path.exists() else dev_path
+                if not os.path.exists(hardware_file):
+                    return {'success': False, 'error': 'Hardware configuration file not found'}
+                with open(hardware_file, 'r') as f:
+                    hardware_data = json.load(f)
+                hardware_configs = hardware_data.get('hardware', {})
+                hw_config = hardware_configs.get(hardware_key, {})
+                if not hw_config:
+                    return {'success': False, 'error': f'Hardware configuration not found: {hardware_key}'}
+
+                config_yaml['radio_type'] = 'sx1262'
+                if 'tx_power' in hw_config:
+                    config_yaml['radio']['tx_power'] = hw_config.get('tx_power', 22)
+                if 'preamble_length' in hw_config:
+                    config_yaml['radio']['preamble_length'] = hw_config.get('preamble_length', 17)
+
+                if 'sx1262' not in config_yaml:
+                    config_yaml['sx1262'] = {}
+                if 'bus_id' in hw_config:
+                    config_yaml['sx1262']['bus_id'] = hw_config.get('bus_id', 0)
+                if 'cs_id' in hw_config:
+                    config_yaml['sx1262']['cs_id'] = hw_config.get('cs_id', 0)
+                if 'reset_pin' in hw_config:
+                    config_yaml['sx1262']['reset_pin'] = hw_config.get('reset_pin', 22)
+                if 'busy_pin' in hw_config:
+                    config_yaml['sx1262']['busy_pin'] = hw_config.get('busy_pin', 17)
+                if 'irq_pin' in hw_config:
+                    config_yaml['sx1262']['irq_pin'] = hw_config.get('irq_pin', 16)
+                if 'txen_pin' in hw_config:
+                    config_yaml['sx1262']['txen_pin'] = hw_config.get('txen_pin', -1)
+                if 'rxen_pin' in hw_config:
+                    config_yaml['sx1262']['rxen_pin'] = hw_config.get('rxen_pin', -1)
+                if 'cs_pin' in hw_config:
+                    config_yaml['sx1262']['cs_pin'] = hw_config.get('cs_pin', -1)
+                if 'txled_pin' in hw_config:
+                    config_yaml['sx1262']['txled_pin'] = hw_config.get('txled_pin', -1)
+                if 'rxled_pin' in hw_config:
+                    config_yaml['sx1262']['rxled_pin'] = hw_config.get('rxled_pin', -1)
+                if 'use_dio3_tcxo' in hw_config:
+                    config_yaml['sx1262']['use_dio3_tcxo'] = hw_config.get('use_dio3_tcxo', False)
+                if 'use_dio2_rf' in hw_config:
+                    config_yaml['sx1262']['use_dio2_rf'] = hw_config.get('use_dio2_rf', False)
+                if 'is_waveshare' in hw_config:
+                    config_yaml['sx1262']['is_waveshare'] = hw_config.get('is_waveshare', False)
+
             # Write updated config
             with open(self._config_path, 'w') as f:
                 yaml.dump(config_yaml, f, default_flow_style=False, sort_keys=False)
             
-            logger.info(f"Setup wizard completed: node_name={node_name}, hardware={hardware_key}, freq={freq_mhz}MHz")
-            
+            logger.info(
+                f"Setup wizard completed: node_name={node_name}, hardware={hardware_key}, freq={freq_mhz}MHz"
+            )
+
             # Trigger service restart after setup
             import subprocess
             import threading
@@ -467,18 +463,19 @@ class APIEndpoints:
             restart_thread = threading.Thread(target=delayed_restart, daemon=True)
             restart_thread.start()
             
-            return {
-                'success': True,
-                'message': 'Setup completed successfully. Service is restarting...',
-                'config': {
-                    'node_name': node_name,
-                    'hardware': hardware_key,
-                    'frequency': freq_mhz,
-                    'spreading_factor': radio_preset.get('spreading_factor'),
-                    'bandwidth': radio_preset.get('bandwidth'),
-                    'coding_rate': radio_preset.get('coding_rate')
-                }
+            result_config = {
+                'node_name': node_name,
+                'hardware': hardware_key,
+                'radio_type': config_yaml.get('radio_type', 'sx1262'),
+                'frequency': freq_mhz,
+                'spreading_factor': radio_preset.get('spreading_factor'),
+                'bandwidth': radio_preset.get('bandwidth'),
+                'coding_rate': radio_preset.get('coding_rate')
             }
+            if hardware_key == 'kiss':
+                result_config['kiss_port'] = config_yaml.get('kiss', {}).get('port')
+                result_config['kiss_baud_rate'] = config_yaml.get('kiss', {}).get('baud_rate')
+            return {'success': True, 'message': 'Setup completed successfully. Service is restarting...', 'config': result_config}
             
         except cherrypy.HTTPError:
             raise
@@ -1307,15 +1304,31 @@ class APIEndpoints:
                     return self._error("Advert interval must be 0 (off) or 1-10080 minutes")
                 self.config["repeater"]["advert_interval_minutes"] = mins
                 applied.append(f"advert.interval={mins}m")
+
+            # KISS modem settings (only when radio_type is kiss)
+            if "kiss_port" in data or "kiss_baud_rate" in data:
+                if self.config.get("radio_type") != "kiss":
+                    return self._error("KISS settings only apply when radio_type is kiss")
+                if "kiss" not in self.config:
+                    self.config["kiss"] = {}
+                if "kiss_port" in data:
+                    self.config["kiss"]["port"] = str(data["kiss_port"]).strip()
+                    applied.append("kiss.port")
+                if "kiss_baud_rate" in data:
+                    self.config["kiss"]["baud_rate"] = int(data["kiss_baud_rate"])
+                    applied.append("kiss.baud_rate")
             
             if not applied:
                 return self._error("No valid settings provided")
             
+            live_sections = ['repeater', 'delays', 'radio']
+            if "kiss" in self.config:
+                live_sections.append("kiss")
             # Save to config file and live update daemon in one operation
             result = self.config_manager.update_and_save(
                 updates={},  # Updates already applied to self.config above
                 live_update=True,
-                live_update_sections=['repeater', 'delays', 'radio']
+                live_update_sections=live_sections
             )
             
             logger.info(f"Radio config updated: {', '.join(applied)}")

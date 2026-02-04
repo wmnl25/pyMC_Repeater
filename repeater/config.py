@@ -197,7 +197,9 @@ def _load_or_create_identity_key(path: Optional[str] = None) -> bytes:
 
 def get_radio_for_board(board_config: dict):
 
-    radio_type = board_config.get("radio_type", "sx1262").lower()
+    radio_type = board_config.get("radio_type", "sx1262").lower().strip()
+    if radio_type == "kiss-modem":
+        radio_type = "kiss"
 
     if radio_type == "sx1262":
         from pymc_core.hardware.sx1262_wrapper import SX1262Radio
@@ -245,5 +247,51 @@ def get_radio_for_board(board_config: dict):
 
         return radio
 
+    elif radio_type == "kiss":
+        try:
+            from pymc_core.hardware.kiss_modem_wrapper import KissModemWrapper
+        except ImportError:
+            try:
+                from pymc_core.hardware.kiss_serial_wrapper import KissSerialWrapper as KissModemWrapper
+            except ImportError:
+                raise RuntimeError(
+                    "KISS modem support requires pyMC_core with KISS support. "
+                    "Install your fork with: pip install -e /path/to/pyMC_core"
+                ) from None
+
+        kiss_config = board_config.get("kiss")
+        if not kiss_config:
+            raise ValueError("Missing 'kiss' section in configuration file for radio_type: kiss")
+
+        port = kiss_config.get("port")
+        if not port:
+            raise ValueError("Missing 'port' in 'kiss' section (e.g. /dev/ttyUSB0)")
+
+        baudrate = int(kiss_config.get("baud_rate", 115200))
+        radio_cfg = board_config.get("radio") or {}
+        radio_config = {
+            "frequency": int(radio_cfg.get("frequency", 869618000)),
+            "bandwidth": int(radio_cfg.get("bandwidth", 62500)),
+            "spreading_factor": int(radio_cfg.get("spreading_factor", 8)),
+            "coding_rate": int(radio_cfg.get("coding_rate", 8)),
+            "tx_power": int(radio_cfg.get("tx_power", 14)),
+        }
+        radio = KissModemWrapper(
+            port=port,
+            baudrate=baudrate,
+            radio_config=radio_config,
+            auto_configure=True,
+        )
+
+        if hasattr(radio, "begin"):
+            try:
+                radio.begin()
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize KISS modem: {e}") from e
+
+        return radio
+
     else:
-        raise RuntimeError(f"Unknown radio type: {radio_type}. Supported: sx1262")
+        raise RuntimeError(
+            f"Unknown radio type: {radio_type}. Supported: sx1262, kiss (or kiss-modem)"
+        )

@@ -336,7 +336,7 @@ EOF
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
     
-    if pip install --break-system-packages --no-cache-dir .; then
+    if pip install --break-system-packages --no-cache-dir .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
         
@@ -589,7 +589,7 @@ EOF
         echo ""
         
         # Upgrade packages (uses cache for unchanged dependencies - much faster)
-        if python3 -m pip install --break-system-packages --upgrade --upgrade-strategy eager .; then
+        if python3 -m pip install --break-system-packages --upgrade --upgrade-strategy eager .[hardware]; then
             echo ""
             echo "✓ Package and dependencies updated successfully!"
         else

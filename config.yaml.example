@@ -1,4 +1,6 @@
 # Default Repeater Configuration
+# radio_type: sx1262 | kiss (use kiss for serial KISS TNC modem)
+radio_type: sx1262
 
 repeater:
   # Node name for logging and identification
@@ -127,6 +129,11 @@ radio:
   # Use implicit header mode
   implicit_header: false
 
+# KISS modem (when radio_type: kiss). Requires pyMC_core with KISS support.
+# kiss:
+#   port: "/dev/ttyUSB0"
+#   baud_rate: 9600
+
 # SX1262 Hardware Configuration
 sx1262:
   # SPI bus and chip select
@@ -212,7 +219,8 @@ mqtt:
 
 # Storage Configuration
 storage:
-  # Directory for persistent storage files (SQLite, RRD)
+  # Directory for persistent storage files (SQLite, RRD).
+  # Use a writable path for local/dev (e.g. "./var/pymc_repeater" or "~/var/pymc_repeater").
   storage_dir: "/var/lib/pymc_repeater"
 
   # Data retention settings
