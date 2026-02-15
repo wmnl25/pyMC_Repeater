@@ -92,6 +92,26 @@ from .constants import (
 logger = logging.getLogger("CompanionFrameServer")
 
 
+def _build_advert_push_frames(data: dict) -> tuple[bytes, Optional[bytes]]:
+    """Build PUSH_CODE_ADVERT short frame and optional PUSH_CODE_NEW_ADVERT full frame from extracted data. Thread-safe for asyncio.to_thread."""
+    pubkey_b = data["pubkey_b"]
+    short = bytes([PUSH_CODE_ADVERT]) + pubkey_b
+    if not data.get("include_full"):
+        return (short, None)
+    full = (
+        bytes([PUSH_CODE_NEW_ADVERT])
+        + pubkey_b
+        + bytes([data["adv_type"], data["flags"], data["opl_byte"]])
+        + data["out_path"]
+        + data["name_b"]
+        + struct.pack("<I", data["last_advert"])
+        + struct.pack("<i", data["gps_lat_int"])
+        + struct.pack("<i", data["gps_lon_int"])
+        + struct.pack("<I", data["lastmod"])
+    )
+    return (short, full)
+
+
 class CompanionFrameServer:
     """TCP server for the MeshCore companion frame protocol.
 
@@ -199,37 +219,48 @@ class CompanionFrameServer:
                 pubkey = bytes.fromhex(pubkey)
             if len(pubkey) < 32:
                 return
-            _write_push(bytes([PUSH_CODE_ADVERT]) + pubkey[:32])
-            # Full contact push (PUSH_CODE_NEW_ADVERT) so app gets NEW_CONTACT and can add to list
-            if not isinstance(contact, dict) and hasattr(contact, "name") and contact.name:
-                pubkey_b = pubkey[:32] if isinstance(pubkey, bytes) else bytes.fromhex(str(pubkey))[:32]
-                name_b = (contact.name.encode("utf-8")[:32] if isinstance(contact.name, str) else contact.name[:32]).ljust(32, b"\x00")
+            pubkey_b = pubkey[:32] if isinstance(pubkey, bytes) else bytes.fromhex(str(pubkey))[:32]
+            include_full = (
+                not isinstance(contact, dict)
+                and hasattr(contact, "name")
+                and contact.name
+            )
+            data = {
+                "pubkey_b": pubkey_b,
+                "include_full": include_full,
+                "adv_type": 0,
+                "flags": 0,
+                "opl_byte": 0xFF,
+                "out_path": b"\x00" * MAX_PATH_SIZE,
+                "name_b": b"\x00" * 32,
+                "last_advert": 0,
+                "gps_lat_int": 0,
+                "gps_lon_int": 0,
+                "lastmod": 0,
+            }
+            if include_full:
+                data["adv_type"] = getattr(contact, "adv_type", 0)
+                data["flags"] = getattr(contact, "flags", 0)
                 opl = getattr(contact, "out_path_len", -1)
-                opl_byte = 0xFF if opl < 0 else min(opl, 255)
+                data["opl_byte"] = 0xFF if opl < 0 else min(opl, 255)
                 out_path = getattr(contact, "out_path", b"") or b""
                 if isinstance(out_path, str):
                     out_path = bytes.fromhex(out_path) if out_path else b""
                 elif isinstance(out_path, (list, bytearray)):
                     out_path = bytes(out_path)
-                out_path = out_path[:MAX_PATH_SIZE].ljust(MAX_PATH_SIZE, b"\x00")
-                adv_type = getattr(contact, "adv_type", 0)
-                flags = getattr(contact, "flags", 0)
-                last_advert = getattr(contact, "last_advert_timestamp", 0)
+                data["out_path"] = bytes(out_path)[:MAX_PATH_SIZE].ljust(MAX_PATH_SIZE, b"\x00")
+                name = contact.name
+                data["name_b"] = (name.encode("utf-8")[:32] if isinstance(name, str) else name[:32]).ljust(32, b"\x00")
+                data["last_advert"] = getattr(contact, "last_advert_timestamp", 0)
+                data["lastmod"] = getattr(contact, "lastmod", 0)
                 gps_lat = getattr(contact, "gps_lat", 0.0)
                 gps_lon = getattr(contact, "gps_lon", 0.0)
-                lastmod = getattr(contact, "lastmod", 0)
-                frame = (
-                    bytes([PUSH_CODE_NEW_ADVERT])
-                    + pubkey_b
-                    + bytes([adv_type, flags, opl_byte])
-                    + out_path
-                    + name_b
-                    + struct.pack("<I", last_advert)
-                    + struct.pack("<i", int(gps_lat * 1e6))
-                    + struct.pack("<i", int(gps_lon * 1e6))
-                    + struct.pack("<I", lastmod)
-                )
-                _write_push(frame)
+                data["gps_lat_int"] = int(gps_lat * 1e6)
+                data["gps_lon_int"] = int(gps_lon * 1e6)
+            short, full = await asyncio.to_thread(_build_advert_push_frames, data)
+            _write_push(short)
+            if full is not None:
+                _write_push(full)
 
         async def on_contact_path_updated(pub_key, path_len, path):
             if isinstance(pub_key, bytes) and len(pub_key) >= 32:
