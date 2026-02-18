@@ -429,21 +429,24 @@ class RepeaterDaemon:
                             records.append(d)
                         bridge.contacts.load_from_dicts(records)
 
-                    # Load channels from SQLite
+                    # Load channels from SQLite (normalize secret to 32 bytes to match
+                    # CompanionBase.set_channel and GroupTextHandler/PacketBuilder)
                     channel_rows = sqlite_handler.companion_load_channels(companion_hash_str)
                     for row in channel_rows:
-                        ch = Channel(
-                            name=row.get("name", ""),
-                            secret=(
-                                row.get("secret", b"")
-                                if isinstance(row.get("secret"), bytes)
-                                else (
-                                    bytes.fromhex(row.get("secret", ""))
-                                    if row.get("secret")
-                                    else b""
-                                )
-                            ),
-                        )
+                        s = row.get("secret", b"")
+                        if isinstance(s, bytes):
+                            raw = s
+                        elif isinstance(s, (bytearray, memoryview)):
+                            raw = bytes(s)
+                        elif s:
+                            raw = bytes.fromhex(s if isinstance(s, str) else str(s))
+                        else:
+                            raw = b""
+                        if len(raw) < 32:
+                            raw = raw + b"\x00" * (32 - len(raw))
+                        elif len(raw) > 32:
+                            raw = raw[:32]
+                        ch = Channel(name=row.get("name", ""), secret=raw)
                         bridge.channels.set(row.get("channel_idx", 0), ch)
 
                     # Preload queued messages from SQLite into bridge

@@ -23,7 +23,9 @@ class PacketRouter:
         self.queue = asyncio.Queue()
         self.running = False
         self.router_task = None
-        
+        # Serialize injects so one local TX completes before the next is processed
+        self._inject_lock = asyncio.Lock()
+
     async def start(self):
         self.running = True
         self.router_task = asyncio.create_task(self._process_queue())
@@ -51,8 +53,13 @@ class PacketRouter:
                 "timestamp": getattr(packet, "timestamp", 0),
             }
 
-            # Use local_transmission=True to bypass forwarding logic
-            await self.daemon.repeater_handler(packet, metadata, local_transmission=True)
+            # Serialize injects so one local TX completes before the next runs
+            # (avoids duty-cycle or dispatcher races where a later packet goes out first)
+            async with self._inject_lock:
+                # Use local_transmission=True to bypass forwarding logic
+                await self.daemon.repeater_handler(
+                    packet, metadata, local_transmission=True
+                )
 
             # Enqueue so router can deliver to companion(s): TXT_MSG -> dest bridge, ACK -> all bridges (sender sees ACK)
             await self.enqueue(packet)

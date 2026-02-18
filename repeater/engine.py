@@ -164,28 +164,69 @@ class RepeaterHandler(BaseHandler):
 
             can_tx, wait_time = self.airtime_mgr.can_transmit(airtime_ms)
 
+            # LBT metadata (set after any TX path that awaits send)
+            tx_metadata = None
+            lbt_attempts = 0
+            lbt_backoff_delays_ms = None
+            lbt_channel_busy = False
+
             if not can_tx:
-                logger.warning(
-                    f"Duty-cycle limit exceeded. Airtime={airtime_ms:.1f}ms, "
-                    f"wait={wait_time:.1f}s before retry"
-                )
-                self.dropped_count += 1
-                drop_reason = "Duty cycle limit"
+                if local_transmission:
+                    # Defer local TX until duty cycle allows instead of dropping
+                    deferred_delay = delay + wait_time
+                    logger.info(
+                        f"Duty-cycle limit: deferring local TX by {wait_time:.1f}s "
+                        f"(airtime={airtime_ms:.1f}ms)"
+                    )
+                    self.forwarded_count += 1
+                    transmitted = True
+                    tx_task = await self.schedule_retransmit(
+                        fwd_pkt, deferred_delay, airtime_ms, local_transmission=True
+                    )
+                    try:
+                        await tx_task
+                    except Exception as e:
+                        self.forwarded_count -= 1
+                        transmitted = False
+                        drop_reason = "TX failed (deferred)"
+                        logger.warning(f"Deferred local TX failed: {e}")
+                        raise
+                    tx_metadata = getattr(fwd_pkt, "_tx_metadata", None)
+                    if tx_metadata:
+                        lbt_attempts = tx_metadata.get("lbt_attempts", 0)
+                        lbt_backoff_delays_ms = tx_metadata.get(
+                            "lbt_backoff_delays_ms", []
+                        )
+                        lbt_channel_busy = tx_metadata.get("lbt_channel_busy", False)
+                        if lbt_attempts > 0:
+                            total_lbt_delay = sum(lbt_backoff_delays_ms)
+                            logger.info(
+                                f"LBT: {lbt_attempts} attempts, "
+                                f"{total_lbt_delay:.0f}ms delay, "
+                                f"backoffs={lbt_backoff_delays_ms}"
+                            )
+                else:
+                    logger.warning(
+                        f"Duty-cycle limit exceeded. Airtime={airtime_ms:.1f}ms, "
+                        f"wait={wait_time:.1f}s before retry"
+                    )
+                    self.dropped_count += 1
+                    drop_reason = "Duty cycle limit"
             else:
                 self.forwarded_count += 1
                 transmitted = True
-                # Schedule retransmit with delay (returns task)
-                tx_task = await self.schedule_retransmit(fwd_pkt, delay, airtime_ms)
-                
-                # Wait for transmission to complete to get LBT metadata
-                await tx_task
-
-                # Extract LBT metadata after transmission
+                tx_task = await self.schedule_retransmit(
+                    fwd_pkt, delay, airtime_ms, local_transmission=local_transmission
+                )
+                try:
+                    await tx_task
+                except Exception as e:
+                    self.forwarded_count -= 1
+                    transmitted = False
+                    drop_reason = "TX failed"
+                    logger.warning(f"Local TX failed: {e}")
+                    raise
                 tx_metadata = getattr(fwd_pkt, "_tx_metadata", None)
-                lbt_attempts = 0
-                lbt_backoff_delays_ms = None
-                lbt_channel_busy = False
-
                 if tx_metadata:
                     lbt_attempts = tx_metadata.get("lbt_attempts", 0)
                     lbt_backoff_delays_ms = tx_metadata.get("lbt_backoff_delays_ms", [])
@@ -672,23 +713,43 @@ class RepeaterHandler(BaseHandler):
             packet.drop_reason = f"Unknown route type: {route_type}"
             return None
 
-    async def schedule_retransmit(self, fwd_pkt: Packet, delay: float, airtime_ms: float = 0.0):
-        """Schedule a packet retransmission with delay and return the task."""
+    async def schedule_retransmit(
+        self,
+        fwd_pkt: Packet,
+        delay: float,
+        airtime_ms: float = 0.0,
+        local_transmission: bool = False,
+    ):
+        """Schedule a packet retransmission with delay and return the task.
+
+        If local_transmission is True and the first send fails, retry once after
+        a short delay (handles transient radio/LBT failures).
+        """
 
         async def delayed_send():
             await asyncio.sleep(delay)
-            try:
-                await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
-                
-                # Record airtime after successful TX
-                if airtime_ms > 0:
-                    self.airtime_mgr.record_tx(airtime_ms)
-                packet_size = fwd_pkt.get_raw_length()
-                logger.info(
-                    f"Retransmitted packet ({packet_size} bytes, {airtime_ms:.1f}ms airtime)"
-                )
-            except Exception as e:
-                logger.error(f"Retransmit failed: {e}")
+            last_error = None
+            for attempt in range(2 if local_transmission else 1):
+                try:
+                    await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
+                    if airtime_ms > 0:
+                        self.airtime_mgr.record_tx(airtime_ms)
+                    packet_size = fwd_pkt.get_raw_length()
+                    logger.info(
+                        f"Retransmitted packet ({packet_size} bytes, "
+                        f"{airtime_ms:.1f}ms airtime)"
+                    )
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"Retransmit failed: {e}")
+                    if local_transmission and attempt == 0:
+                        logger.info("Retrying local TX in 1s...")
+                        await asyncio.sleep(1.0)
+                    else:
+                        raise
+            if last_error is not None:
+                raise last_error
 
         return asyncio.create_task(delayed_send())
 
