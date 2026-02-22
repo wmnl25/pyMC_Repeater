@@ -12,6 +12,7 @@ import time
 from pymc_core.node.handlers.protocol_request import (
     REQ_TYPE_GET_ACCESS_LIST,
     REQ_TYPE_GET_NEIGHBOURS,
+    REQ_TYPE_GET_OWNER_INFO,
     REQ_TYPE_GET_STATUS,
     REQ_TYPE_GET_TELEMETRY_DATA,
     SERVER_RESPONSE_DELAY_MS,

@@ -43,7 +43,7 @@ class CompanionFrameServer(_BaseFrameServer):
             port=port,
             bind_address=bind_address,
             device_model="pyMC-Repeater-Companion",
-            device_version="1.0.0",
+            device_version=None,  # use FIRMWARE_VER_CODE from pyMC_core
             build_date="13 Feb 2026",
             local_hash=local_hash,
             stats_getter=stats_getter,

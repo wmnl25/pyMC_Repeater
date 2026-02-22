@@ -8,6 +8,7 @@ import asyncio
 import logging
 
 from pymc_core.node.handlers.login_server import LoginServerHandler
+from pymc_core.protocol.constants import PAYLOAD_TYPE_ANON_REQ
 
 logger = logging.getLogger("LoginHelper")
 
@@ -125,9 +126,12 @@ class LoginHelper:
                 packet.mark_do_not_retransmit()
                 return True
             else:
-                logger.debug(
-                    f"No login handler registered for hash 0x{dest_hash:02X}, allowing forward"
-                )
+                # ANON_REQ to other nodes (e.g. owner-info to firmware) is normal; skip log to avoid spam
+                ptype = getattr(packet, "get_payload_type", lambda: None)()
+                if ptype != PAYLOAD_TYPE_ANON_REQ:
+                    logger.debug(
+                        f"No login handler registered for hash 0x{dest_hash:02X}, allowing forward"
+                    )
                 return False
 
         except Exception as e:

@@ -33,7 +33,7 @@ The repeater daemon runs continuously as a background process, forwarding LoRa p
 The repeater supports two radio backends:
 
 - **SX1262 (SPI)** — Direct connection to LoRa modules (HATs, etc.) as listed below.
-- **KISS modem** — Serial TNC using the KISS protocol. Requires a pyMC_core build with KISS support (e.g. [agessaman/pyMC_core (dev)](https://github.com/agessaman/pyMC_core/tree/dev)). Set `radio_type: kiss` in config and configure `kiss.port` and `kiss.baud_rate`. The setup script (`./setup-radio-config.sh`) offers a "KISS modem" option when configuring the repeater.
+- **KISS modem** — Serial TNC using the KISS protocol. Set `radio_type: kiss` in config and configure `kiss.port` and `kiss.baud_rate`.
 
 The following SX1262 hardware is currently supported out-of-the-box:
 
@@ -162,11 +162,6 @@ http://<repeater-ip>:8000
 **Development Install:**
 ```bash
 pip install -e .
-```
-
-On **macOS** (or when using only the KISS modem), the base install is enough. On **Raspberry Pi** with SX1262 hardware, install with the optional hardware extra so SPI/spidev is available:
-```bash
-pip install -e .[hardware]
 ```
 
 ## Configuration
