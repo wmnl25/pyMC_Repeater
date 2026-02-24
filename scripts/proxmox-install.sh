@@ -94,6 +94,8 @@ AVAILABLE_STORAGES=$(pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {prin
 echo "  Available storages: ${AVAILABLE_STORAGES}"
 read -p "  Storage [${CT_STORAGE}]: " -r input; CT_STORAGE="${input:-$CT_STORAGE}"
 read -p "  Git branch [${BRANCH}]: " -r input; BRANCH="${input:-$BRANCH}"
+read -sp "  Root password [pymc]: " CT_PASSWORD; echo
+CT_PASSWORD="${CT_PASSWORD:-pymc}"
 
 # ── Get next CTID ─────────────────────────────────────────────────────────
 CTID=$(pvesh get /cluster/nextid)
@@ -131,6 +133,7 @@ pct create "$CTID" "${CT_TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     --features nesting=1 \
     --onboot 1 \
     --start 0 \
+    --password "$CT_PASSWORD" \
     --ostype debian
 msg_ok "Container created"
 
@@ -167,8 +170,17 @@ msg_info "Installing git inside container..."
 pct exec "$CTID" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq && apt-get install -y git whiptail >/dev/null 2>&1
+
+    # Enable auto-login on console (no password prompt in Proxmox web console)
+    mkdir -p /etc/systemd/system/container-getty@1.service.d
+    cat > /etc/systemd/system/container-getty@1.service.d/override.conf <<'AUTOLOGIN'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 \$TERM
+AUTOLOGIN
+    systemctl daemon-reload
 "
-msg_ok "Git installed"
+msg_ok "Git installed, console auto-login enabled"
 
 msg_info "Cloning pyMC_Repeater (branch: ${BRANCH})..."
 pct exec "$CTID" -- bash -c "git clone --branch ${BRANCH} ${REPO} /root/pyMC_Repeater"

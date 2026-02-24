@@ -182,9 +182,16 @@ install_repeater() {
     # Welcome screen
     $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
     
-    # SPI Check - Universal approach that works on all boards
+    # SPI Check - skip for CH341 USB-SPI adapter (handles SPI over USB)
     SPI_MISSING=0
-    if ! ls /dev/spidev* >/dev/null 2>&1; then
+    USES_CH341=0
+    if [ -f "$CONFIG_DIR/config.yaml" ]; then
+        if grep -q "radio_type:.*sx1262_ch341" "$CONFIG_DIR/config.yaml" 2>/dev/null; then
+            USES_CH341=1
+        fi
+    fi
+
+    if [ "$USES_CH341" -eq 0 ] && ! ls /dev/spidev* >/dev/null 2>&1; then
         # SPI devices not found, check if we're on a Raspberry Pi and can enable it
         CONFIG_FILE=""
         if [ -f "/boot/firmware/config.txt" ]; then
