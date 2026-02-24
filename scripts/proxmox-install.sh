@@ -215,12 +215,22 @@ msg_info "Cloning pyMC_Repeater (branch: ${BRANCH})..."
 pct exec "$CTID" -- bash -c "git clone --branch ${BRANCH} ${REPO} /root/pyMC_Repeater"
 msg_ok "Repository cloned"
 
-# Pre-seed config with CH341 radio type so manage.sh skips the SPI check
+# Pre-seed config with CH341 radio type and correct GPIO pins
 pct exec "$CTID" -- bash -c "
     mkdir -p /etc/pymc_repeater
     if [ -f /root/pyMC_Repeater/config.yaml.example ]; then
         cp /root/pyMC_Repeater/config.yaml.example /etc/pymc_repeater/config.yaml
+        # Set radio type to CH341
         sed -i 's/^radio_type: sx1262$/radio_type: sx1262_ch341/' /etc/pymc_repeater/config.yaml
+        # Replace Pi BCM GPIO pins with CH341 GPIO pin numbers (0-7)
+        sed -i 's/cs_pin: 21/cs_pin: 0/'       /etc/pymc_repeater/config.yaml
+        sed -i 's/reset_pin: 18/reset_pin: 2/'  /etc/pymc_repeater/config.yaml
+        sed -i 's/busy_pin: 20/busy_pin: 4/'    /etc/pymc_repeater/config.yaml
+        sed -i 's/irq_pin: 16/irq_pin: 6/'      /etc/pymc_repeater/config.yaml
+        sed -i 's/rxen_pin: -1/rxen_pin: 1/'     /etc/pymc_repeater/config.yaml
+        # Enable TCXO and DIO2 RF switch for E22 module
+        sed -i 's/use_dio3_tcxo: false/use_dio3_tcxo: true/' /etc/pymc_repeater/config.yaml
+        sed -i 's/use_dio2_rf: false/use_dio2_rf: true/'     /etc/pymc_repeater/config.yaml
     fi
 "
 
