@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from pymc_core.node.handlers.ack import AckHandler
 from pymc_core.node.handlers.advert import AdvertHandler
@@ -15,6 +16,18 @@ from pymc_core.node.handlers.trace import TraceHandler
 
 logger = logging.getLogger("PacketRouter")
 
+# Deliver PATH and protocol-response (PATH) to companion at most once per logical packet
+# so the client is not spammed with duplicate telemetry when the mesh delivers multiple copies.
+_COMPANION_DEDUPE_TTL_SEC = 60.0
+
+
+def _companion_dedup_key(packet) -> str | None:
+    """Return a stable key for companion delivery deduplication, or None if not available."""
+    try:
+        return packet.calculate_packet_hash().hex().upper()
+    except Exception:
+        return None
+
 
 class PacketRouter:
 
@@ -25,6 +38,8 @@ class PacketRouter:
         self.router_task = None
         # Serialize injects so one local TX completes before the next is processed
         self._inject_lock = asyncio.Lock()
+        # Hash -> expiry time; skip delivering same PATH/protocol-response to companions more than once
+        self._companion_delivered = {}
 
     async def start(self):
         self.running = True
@@ -41,6 +56,19 @@ class PacketRouter:
                 pass
         logger.info("Packet router stopped")
     
+    def _should_deliver_path_to_companions(self, packet) -> bool:
+        """Return True if this PATH/protocol-response should be delivered to companions (first of duplicates)."""
+        key = _companion_dedup_key(packet)
+        if not key:
+            return True
+        now = time.time()
+        # Prune expired
+        self._companion_delivered = {k: v for k, v in self._companion_delivered.items() if v > now}
+        if key in self._companion_delivered:
+            return False
+        self._companion_delivered[key] = now + _COMPANION_DEDUPE_TTL_SEC
+        return True
+
     async def enqueue(self, packet):
         """Add packet to router queue."""
         await self.queue.put(packet)
@@ -68,6 +96,14 @@ class PacketRouter:
             logger.debug(
                 f"Injected packet processed by engine as local transmission ({packet_len} bytes)"
             )
+            # Log protocol REQ (e.g. status/telemetry) so we can confirm target node
+            ptype = getattr(packet, "get_payload_type", lambda: None)()
+            if ptype == ProtocolRequestHandler.payload_type() and packet.payload and packet_len >= 1:
+                logger.info(
+                    "Injected protocol REQ: dest=0x%02x, payload=%d bytes",
+                    packet.payload[0],
+                    packet_len,
+                )
             return True
 
         except Exception as e:
@@ -170,32 +206,79 @@ class PacketRouter:
             dest_hash = packet.payload[0] if packet.payload else None
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             if dest_hash is not None and dest_hash in companion_bridges:
-                await companion_bridges[dest_hash].process_received_packet(packet)
+                if self._should_deliver_path_to_companions(packet):
+                    await companion_bridges[dest_hash].process_received_packet(packet)
                 processed_by_injection = True
             elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
 
         elif payload_type == LoginResponseHandler.payload_type():
-            # PAYLOAD_TYPE_RESPONSE (0x01): login responses from remote repeaters.
-            # Deliver to all companion bridges so the bridge that initiated the login receives it.
+            # PAYLOAD_TYPE_RESPONSE (0x01): payload is dest_hash(1)+src_hash(1)+encrypted.
+            # Deliver to the bridge that is the destination, or to all bridges when the
+            # response is addressed to this repeater (path-based reply: firmware sends
+            # to first hop instead of original requester).
+            dest_hash = packet.payload[0] if packet.payload and len(packet.payload) >= 1 else None
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
-            for bridge in companion_bridges.values():
+            local_hash = getattr(self.daemon, "local_hash", None)
+            if dest_hash is not None and dest_hash in companion_bridges:
                 try:
-                    await bridge.process_received_packet(packet)
+                    await companion_bridges[dest_hash].process_received_packet(packet)
+                    logger.info(
+                        "RESPONSE dest=0x%02x delivered to companion bridge",
+                        dest_hash,
+                    )
                 except Exception as e:
-                    logger.debug(f"Companion bridge LOGIN_RESPONSE error: {e}")
-            if companion_bridges:
+                    logger.debug(f"Companion bridge RESPONSE error: {e}")
+                processed_by_injection = True
+            elif dest_hash == local_hash and companion_bridges:
+                # Response addressed to this repeater (e.g. path-based reply to first hop)
+                for bridge in companion_bridges.values():
+                    try:
+                        await bridge.process_received_packet(packet)
+                    except Exception as e:
+                        logger.debug(f"Companion bridge RESPONSE error: {e}")
+                logger.info(
+                    "RESPONSE dest=0x%02x (local) delivered to %d companion bridge(s)",
+                    dest_hash,
+                    len(companion_bridges),
+                )
+                processed_by_injection = True
+            elif companion_bridges and len(companion_bridges) == 1:
+                # Single bridge and dest not in bridges: likely ANON_REQ response (dest = ephemeral
+                # sender hash). Deliver to the only bridge so telemetry/login responses reach the client.
+                (single_bridge_hash,) = companion_bridges.keys()
+                try:
+                    await list(companion_bridges.values())[0].process_received_packet(packet)
+                    logger.info(
+                        "RESPONSE dest=0x%02x (anon) delivered to sole companion bridge 0x%02x",
+                        dest_hash or 0,
+                        single_bridge_hash,
+                    )
+                except Exception as e:
+                    logger.debug(f"Companion bridge RESPONSE (anon) error: {e}")
+                processed_by_injection = True
+            elif companion_bridges:
+                # Multiple bridges; cannot guess which one. Log and drop.
+                src_hash = packet.payload[1] if packet.payload and len(packet.payload) >= 2 else None
+                logger.debug(
+                    "RESPONSE dest=0x%02x src=0x%02x not for us (bridges %s, local=0x%02x)",
+                    dest_hash or 0,
+                    src_hash if src_hash is not None else 0,
+                    [f"0x{h:02x}" for h in companion_bridges],
+                    local_hash if local_hash is not None else 0,
+                )
                 processed_by_injection = True
 
         elif payload_type == ProtocolResponseHandler.payload_type():
             # PAYLOAD_TYPE_PATH (0x08): protocol responses (telemetry, binary, etc.).
-            # Deliver to all companion bridges (response dest_hash is the client, not the bridge).
+            # Deliver at most once per logical packet so the client is not spammed with duplicates.
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
-            for bridge in companion_bridges.values():
-                try:
-                    await bridge.process_received_packet(packet)
-                except Exception as e:
-                    logger.debug(f"Companion bridge RESPONSE error: {e}")
+            if companion_bridges and self._should_deliver_path_to_companions(packet):
+                for bridge in companion_bridges.values():
+                    try:
+                        await bridge.process_received_packet(packet)
+                    except Exception as e:
+                        logger.debug(f"Companion bridge RESPONSE error: {e}")
             if companion_bridges:
                 processed_by_injection = True
 

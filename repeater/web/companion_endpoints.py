@@ -439,13 +439,16 @@ class CompanionAPIEndpoints:
 
         Body: pub_key, want_base?, want_location?, want_environment?,
         timeout?, companion_name?
+
+        On success, telemetry_data includes raw_bytes (LPP hex), sensors (parsed),
+        and frame_bytes (hex): companion-style frame 0x8B + 0 + 6B pubkey prefix + LPP.
         """
         self._require_post()
         try:
             body = self._get_json_body()
             bridge = self._get_bridge(**self._resolve_bridge_params(body))
             pub_key = self._pub_key_from_hex(body.get("pub_key", ""))
-            timeout = float(body.get("timeout", 10.0))
+            timeout = float(body.get("timeout", 20.0))
             result = self._run_async(
                 bridge.send_telemetry_request(
                     pub_key,
