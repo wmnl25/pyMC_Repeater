@@ -187,6 +187,27 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 \$TERM
 AUTOLOGIN
     systemctl daemon-reload
+
+    # Login banner with system info
+    cat > /etc/profile.d/pymc-motd.sh <<'MOTD'
+#!/bin/sh
+HOSTNAME=\$(hostname)
+IP=\$(hostname -I | awk '{print \$1}')
+OS=\$(. /etc/os-release && echo \"\$NAME\")
+VER=\$(. /etc/os-release && echo \"\$VERSION_ID\")
+echo \"\"
+echo \"    pyMC Repeater LXC Container\"
+echo \"    🌐  GitHub: https://github.com/rightup/pyMC_Repeater\"
+echo \"\"
+echo \"    🖥️   OS: \$OS - Version: \$VER\"
+echo \"    🏠  Hostname: \$HOSTNAME\"
+echo \"    💡  IP Address: \$IP\"
+echo \"    📡  Dashboard: http://\$IP:8000\"
+echo \"\"
+echo \"    Management: cd /opt/pymc_repeater && bash manage.sh\"
+echo \"\"
+MOTD
+    chmod +x /etc/profile.d/pymc-motd.sh
 "
 msg_ok "Git installed, locale fixed, console auto-login enabled"
 
@@ -200,6 +221,17 @@ pct exec "$CTID" -- bash -c "
     if [ -f /root/pyMC_Repeater/config.yaml.example ]; then
         cp /root/pyMC_Repeater/config.yaml.example /etc/pymc_repeater/config.yaml
         sed -i 's/^radio_type:.*/radio_type: sx1262_ch341/' /etc/pymc_repeater/config.yaml
+        # Add CH341 section if not present
+        if ! grep -q '^ch341:' /etc/pymc_repeater/config.yaml; then
+            cat >> /etc/pymc_repeater/config.yaml <<'CH341CFG'
+
+# CH341 USB-to-SPI adapter settings (only used when radio_type: sx1262_ch341)
+# NOTE: VID/PID are integers. Hex is also accepted in YAML, e.g. 0x1A86.
+ch341:
+  vid: 6790   # 0x1A86
+  pid: 21778  # 0x5512
+CH341CFG
+        fi
     fi
 "
 
