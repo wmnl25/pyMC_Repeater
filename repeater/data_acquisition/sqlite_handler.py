@@ -817,10 +817,33 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (hours * 3600)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
-                conn.row_factory = sqlite3.Row
-
-                type_counts = {}
+            # Align with pyMC_core feat/newRadios PAYLOAD_TYPES (0x0B = CONTROL)
+            try:
+                from pymc_core.protocol.utils import PAYLOAD_TYPES as _PT
+                _human = {
+                    "REQ": "Request",
+                    "RESPONSE": "Response",
+                    "TXT_MSG": "Plain Text Message",
+                    "ACK": "Acknowledgment",
+                    "ADVERT": "Node Advertisement",
+                    "GRP_TXT": "Group Text Message",
+                    "GRP_DATA": "Group Datagram",
+                    "ANON_REQ": "Anonymous Request",
+                    "PATH": "Returned Path",
+                    "TRACE": "Trace",
+                    "MULTIPART": "Multi-part Packet",
+                    "CONTROL": "Control",
+                    "RAW_CUSTOM": "Custom Packet",
+                }
+                packet_type_names = {}
+                for i in range(16):
+                    code = _PT.get(i)
+                    if code:
+                        label = _human.get(code, code.replace("_", " ").title())
+                        packet_type_names[i] = f"{label} ({code})"
+                    else:
+                        packet_type_names[i] = f"Reserved Type {i}"
+            except ImportError:
                 packet_type_names = {
                     0: "Request (REQ)",
                     1: "Response (RESPONSE)",
@@ -832,14 +855,18 @@ class SQLiteHandler:
                     7: "Anonymous Request (ANON_REQ)",
                     8: "Returned Path (PATH)",
                     9: "Trace (TRACE)",
-                    10: "Multi-part Packet",
-                    11: "Reserved Type 11",
+                    10: "Multi-part Packet (MULTIPART)",
+                    11: "Control (CONTROL)",
                     12: "Reserved Type 12",
                     13: "Reserved Type 13",
                     14: "Reserved Type 14",
                     15: "Custom Packet (RAW_CUSTOM)",
                 }
 
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+
+                type_counts = {}
                 for packet_type in range(16):
                     count = conn.execute(
                         "SELECT COUNT(*) FROM packets WHERE type = ? AND timestamp > ?",
