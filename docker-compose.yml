@@ -1,0 +1,16 @@
+services:
+  pymc-repeater:
+    build: .
+    container_name: pymc-repeater
+    restart: unless-stopped
+    devices:
+      - /dev/spidev0.0
+      - /dev/spidev0.1
+    volumes:
+      - ./config.yaml:/etc/pymc_repeater/config.yaml:ro
+      - pymc_data:/var/lib/pymc_repeater
+    ports:
+      - "8000:8000"
+
+volumes:
+  pymc_data:

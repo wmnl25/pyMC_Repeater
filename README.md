@@ -249,7 +249,11 @@ Pre-commit hooks will automatically:
 - Lint with flake8
 - Fix trailing whitespace and other file issues
 
+## Docker
 
+```bash
+docker build -t pymc:latest . --platform linux/arm/v7
+```
 
 ## Support
 
