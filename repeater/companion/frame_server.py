@@ -10,16 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import struct
 from typing import Optional
 
-from pymc_core.companion.constants import (
-    RESP_CODE_CHANNEL_MSG_RECV,
-    RESP_CODE_CHANNEL_MSG_RECV_V3,
-    RESP_CODE_CONTACT_MSG_RECV,
-    RESP_CODE_CONTACT_MSG_RECV_V3,
-    RESP_CODE_NO_MORE_MESSAGES,
-)
+from pymc_core.companion.constants import RESP_CODE_NO_MORE_MESSAGES
 from pymc_core.companion.frame_server import CompanionFrameServer as _BaseFrameServer
 from pymc_core.companion.models import QueuedMessage
 
@@ -103,58 +96,7 @@ class CompanionFrameServer(_BaseFrameServer):
         if msg is None:
             self._write_frame(bytes([RESP_CODE_NO_MORE_MESSAGES]))
             return
-        if msg.is_channel:
-            path_len_byte = msg.path_len if msg.path_len < 256 else 0xFF
-            txt_type = 0
-            text_bytes = (msg.text or "").rstrip("\x00").encode("utf-8", errors="replace")
-            if self._app_target_ver >= 3:
-                frame = (
-                    bytes(
-                        [
-                            RESP_CODE_CHANNEL_MSG_RECV_V3,
-                            0,
-                            0,
-                            0,
-                            msg.channel_idx,
-                            path_len_byte,
-                            txt_type,
-                        ]
-                    )
-                    + struct.pack("<I", msg.timestamp)
-                    + text_bytes
-                )
-            else:
-                frame = bytes(
-                    [
-                        RESP_CODE_CHANNEL_MSG_RECV,
-                        msg.channel_idx,
-                        path_len_byte,
-                        txt_type,
-                    ]
-                )
-                frame += struct.pack("<I", msg.timestamp) + text_bytes
-        else:
-            prefix = (
-                msg.sender_key[:6] if len(msg.sender_key) >= 6 else msg.sender_key.ljust(6, b"\x00")
-            )
-            path_len_byte = msg.path_len if msg.path_len < 256 else 0xFF
-            text_bytes = msg.text.encode("utf-8", errors="replace")
-            if self._app_target_ver >= 3:
-                frame = (
-                    bytes([RESP_CODE_CONTACT_MSG_RECV_V3, 0, 0, 0])
-                    + prefix
-                    + bytes([path_len_byte, msg.txt_type])
-                    + struct.pack("<I", msg.timestamp)
-                    + text_bytes
-                )
-            else:
-                frame = (
-                    bytes([RESP_CODE_CONTACT_MSG_RECV])
-                    + prefix
-                    + bytes([path_len_byte, msg.txt_type])
-                )
-                frame += struct.pack("<I", msg.timestamp) + text_bytes
-        self._write_frame(frame)
+        self._write_frame(self._build_message_frame(msg))
 
     @staticmethod
     def _contact_to_dict(c) -> dict:
