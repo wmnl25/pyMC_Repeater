@@ -316,6 +316,17 @@ This script will:
 The script will prompt you for each optional removal step.
 
 
+## Docker
+
+You can now run PyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file before you get started.
+
+```bash
+docker compose up -d --force-recreate --build
+```
+
+Just note that you will have to pass in a `config.yaml` into the container. You can create a new config by following the instructions in the [Configuration section](#configuration).
+
+
 ## Roadmap / Planned Features
 
 - [ ] **Public Map Integration** - Submit repeater location and details to public map for discovery
@@ -362,8 +373,6 @@ Pre-commit hooks will automatically:
 - Sort imports with isort
 - Lint with flake8
 - Fix trailing whitespace and other file issues
-
-
 
 ## Support
 
