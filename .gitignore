@@ -58,3 +58,6 @@ identity.json
 *.log
 .DS_Store
 syncpi.sh
+
+# Docker
+/data
