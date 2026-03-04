@@ -318,7 +318,7 @@ The script will prompt you for each optional removal step.
 
 ## Docker Compose
 
-You can now run PyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file before you get started. It will need some configuration changes based on what hardware you're using (USB vs SPI). Look at the commented out lines to see which hardware requires what lines and only enable what you need.
+You can now run pyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file before you get started. It will need some configuration changes based on what hardware you're using (USB vs SPI). Look at the commented out lines to see which hardware requires what lines and only enable what you need.
 
 Here is what you'll need to do in order to get the container running:
 
@@ -328,7 +328,7 @@ Here is what you'll need to do in order to get the container running:
 cp ./config.yaml.example ./config.yaml
 ```
 
-2. Run the configuration script and follow the prompts for the configuration you want to use.
+2. Run the configuration script and follow the prompts.
 
 ```bash
 sudo bash ./setup-radio-config.sh
@@ -336,7 +336,7 @@ sudo bash ./setup-radio-config.sh
 
 3. Modify the `config.yaml` file with a unique web UI password. This allows you to bypass the `/setup` page when logging for the first time. You can find the value under `repeater.security.admin_password`. Change to _anything_ besides the default of `admin123`.
 
-4. Configure the [docker compose](./docker-compose.yml) to your specific hardware and file paths.
+4. Configure the [docker compose](./docker-compose.yml) to your specific hardware and file paths. Be sure to comment-out or delete lines that aren't required for your hardware. Please note that your hardware devices might be at a different path than those listed in the docker compose file.
 
 5. Build and start the container.
 
