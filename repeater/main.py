@@ -146,6 +146,7 @@ class RepeaterDaemon:
             self.advert_helper = AdvertHelper(
                 local_identity=self.local_identity,
                 storage=self.repeater_handler.storage if self.repeater_handler else None,
+                config=self.config,
                 log_fn=logger.info,
             )
             logger.info("Advert processing helper initialized")
