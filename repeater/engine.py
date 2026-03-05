@@ -19,7 +19,7 @@ from pymc_core.protocol.constants import (
     ROUTE_TYPE_TRANSPORT_DIRECT,
     ROUTE_TYPE_TRANSPORT_FLOOD,
 )
-from pymc_core.protocol.packet_utils import PacketHeaderUtils, PacketTimingUtils
+from pymc_core.protocol.packet_utils import PacketHeaderUtils, PacketTimingUtils, PathUtils
 
 from repeater.airtime import AirtimeManager
 from repeater.data_acquisition import StorageCollector
@@ -36,11 +36,12 @@ class RepeaterHandler(BaseHandler):
 
         return 0xFF  # Special marker (not a real payload type)
 
-    def __init__(self, config: dict, dispatcher, local_hash: int, send_advert_func=None):
+    def __init__(self, config: dict, dispatcher, local_hash: int, *, local_hash_bytes=None, send_advert_func=None):
 
         self.config = config
         self.dispatcher = dispatcher
         self.local_hash = local_hash
+        self.local_hash_bytes = local_hash_bytes or bytes([local_hash])
         self.send_advert_func = send_advert_func
         self.airtime_mgr = AirtimeManager(config)
         self.seen_packets = OrderedDict()
@@ -585,8 +586,17 @@ class RepeaterHandler(BaseHandler):
         elif not isinstance(packet.path, bytearray):
             packet.path = bytearray(packet.path)
 
-        packet.path.append(self.local_hash)
-        packet.path_len = len(packet.path)
+        hash_size = packet.get_path_hash_size()
+        hop_count = packet.get_path_hash_count()
+
+        # Check path won't exceed MAX_PATH_SIZE after append
+        if (hop_count + 1) * hash_size > MAX_PATH_SIZE:
+            packet.drop_reason = "Path would exceed MAX_PATH_SIZE"
+            return None
+
+        # Append hash_size bytes from our public key prefix
+        packet.path.extend(self.local_hash_bytes[:hash_size])
+        packet.path_len = PathUtils.encode_path_len(hash_size, hop_count + 1)
 
         self.mark_seen(packet)
 
@@ -594,13 +604,16 @@ class RepeaterHandler(BaseHandler):
 
     def direct_forward(self, packet: Packet) -> Optional[Packet]:
 
+        hash_size = packet.get_path_hash_size()
+        hop_count = packet.get_path_hash_count()
+
         # Check if we're the next hop
-        if not packet.path or len(packet.path) == 0:
+        if not packet.path or len(packet.path) < hash_size:
             packet.drop_reason = "Direct: no path"
             return None
 
-        next_hop = packet.path[0] 
-        if next_hop != self.local_hash:
+        next_hop = bytes(packet.path[:hash_size])
+        if next_hop != self.local_hash_bytes[:hash_size]:
             packet.drop_reason = "Direct: not for us"
             return None
 
@@ -610,8 +623,9 @@ class RepeaterHandler(BaseHandler):
             return None
 
         original_path = list(packet.path)
-        packet.path = bytearray(packet.path[1:])
-        packet.path_len = len(packet.path)
+        # Remove first hash entry (hash_size bytes)
+        packet.path = bytearray(packet.path[hash_size:])
+        packet.path_len = PathUtils.encode_path_len(hash_size, hop_count - 1)
 
         self.mark_seen(packet)
 

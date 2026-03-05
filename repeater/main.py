@@ -124,6 +124,7 @@ class RepeaterDaemon:
 
             pubkey = local_identity.get_public_key()
             self.local_hash = pubkey[0]
+            self.local_hash_bytes = bytes(pubkey[:3])
 
             logger.info(f"Local identity set: {local_identity.get_address_bytes().hex()}")
             local_hash_hex = f"0x{self.local_hash:02x}"
@@ -135,7 +136,9 @@ class RepeaterDaemon:
             self.dispatcher._is_own_packet = lambda pkt: False
 
             self.repeater_handler = RepeaterHandler(
-                self.config, self.dispatcher, self.local_hash, send_advert_func=self.send_advert
+                self.config, self.dispatcher, self.local_hash,
+                local_hash_bytes=self.local_hash_bytes,
+                send_advert_func=self.send_advert,
             )
 
             # Create router
