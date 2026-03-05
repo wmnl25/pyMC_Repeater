@@ -742,6 +742,9 @@ class RepeaterHandler(BaseHandler):
                     "longitude": repeater_config.get("longitude", 0.0),
                     "max_flood_hops": repeater_config.get("max_flood_hops", 3),
                     "advert_interval_minutes": repeater_config.get("advert_interval_minutes", 120),
+                    "advert_rate_limit": repeater_config.get("advert_rate_limit", {}),
+                    "advert_penalty_box": repeater_config.get("advert_penalty_box", {}),
+                    "advert_adaptive": repeater_config.get("advert_adaptive", {}),
                 },
                 "radio": self.config.get("radio", {}),  # Read from live config, not cached radio_config
                 "duty_cycle": {
