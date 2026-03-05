@@ -113,6 +113,16 @@ class AdvertHelper:
         self._stats_adverts_allowed = 0
         self._stats_adverts_dropped = 0
         self._stats_tier_changes = 0
+        
+        # Recent drops tracking (keep last 20)
+        self._recent_drops = []
+        self._max_recent_drops = 20
+        
+        # Memory management
+        self._last_cleanup = time.time()
+        self._cleanup_interval_seconds = 3600.0  # Clean up every hour
+        self._bucket_state_retention_seconds = 604800.0  # Keep inactive pubkeys for 7 days
+        self._max_tracked_pubkeys = 10000  # Hard limit on tracked pubkeys
 
         logger.info(
             f"Advert limiter: adaptive={self._adaptive_enabled}, "
@@ -120,6 +130,64 @@ class AdvertHelper:
             f"bucket={self._base_bucket_capacity:.1f}, "
             f"penalty={self._penalty_enabled}"
         )
+
+    # -------------------------------------------------------------------------
+    # Memory management
+    # -------------------------------------------------------------------------
+
+    def _cleanup_old_state(self, now: float) -> None:
+        """Clean up old/expired entries to prevent unbounded memory growth."""
+        # 1. Remove expired penalties
+        expired_penalties = [pk for pk, until in self._penalty_until.items() if until < now]
+        for pk in expired_penalties:
+            del self._penalty_until[pk]
+        
+        # 2. Remove old bucket states for inactive pubkeys
+        inactive_pubkeys = [
+            pk for pk, state in self._bucket_state.items()
+            if now - state.get("last_seen", 0) > self._bucket_state_retention_seconds
+        ]
+        for pk in inactive_pubkeys:
+            del self._bucket_state[pk]
+            # Also clean up related violation state
+            if pk in self._violation_state:
+                del self._violation_state[pk]
+        
+        # 3. Decay old violations based on decay time
+        for pk, vstate in list(self._violation_state.items()):
+            last_violation = vstate.get("last_violation", 0)
+            if now - last_violation > self._penalty_decay_seconds:
+                # Reset violation count after decay period
+                vstate["count"] = 0
+        
+        # 4. Hard limit: if we're tracking too many pubkeys, remove oldest inactive ones
+        if len(self._bucket_state) > self._max_tracked_pubkeys:
+            # Sort by last_seen and remove oldest 10%
+            sorted_pubkeys = sorted(
+                self._bucket_state.items(),
+                key=lambda x: x[1].get("last_seen", 0)
+            )
+            to_remove = int(len(sorted_pubkeys) * 0.1)
+            for pk, _ in sorted_pubkeys[:to_remove]:
+                del self._bucket_state[pk]
+                if pk in self._violation_state:
+                    del self._violation_state[pk]
+                if pk in self._penalty_until:
+                    del self._penalty_until[pk]
+        
+        # 5. Limit known neighbors set to prevent unbounded growth
+        if len(self._known_neighbors) > 1000:
+            # Clear the oldest half (simple approach - could be more sophisticated)
+            self._known_neighbors = set(list(self._known_neighbors)[500:])
+        
+        if expired_penalties or inactive_pubkeys:
+            logger.debug(
+                f"Cleaned up {len(expired_penalties)} expired penalties, "
+                f"{len(inactive_pubkeys)} inactive pubkeys. "
+                f"Tracking: {len(self._bucket_state)} buckets, "
+                f"{len(self._penalty_until)} penalties, "
+                f"{len(self._known_neighbors)} neighbors"
+            )
 
     # -------------------------------------------------------------------------
     # Adaptive tier calculation
@@ -148,6 +216,11 @@ class AdvertHelper:
             self._packets_in_window = 0
             self._duplicates_in_window = 0
             self._last_metrics_update = now
+            
+            # Periodic cleanup
+            if now - self._last_cleanup >= self._cleanup_interval_seconds:
+                self._cleanup_old_state(now)
+                self._last_cleanup = now
 
         # Count this event
         if is_advert:
@@ -385,6 +458,15 @@ class AdvertHelper:
             "active_penalties": active_penalties,
             "tracked_pubkeys": len(self._bucket_state),
             "bucket_states": bucket_summary,
+            "recent_drops": [
+                {
+                    "pubkey": drop["pubkey"],
+                    "name": drop["name"],
+                    "reason": drop["reason"],
+                    "seconds_ago": round(now - drop["timestamp"], 1)
+                }
+                for drop in reversed(self._recent_drops)  # Most recent first
+            ],
         }
 
     async def process_advert_packet(self, packet, rssi: int, snr: float) -> None:
@@ -422,9 +504,21 @@ class AdvertHelper:
             now = time.time()
             allowed, reason = self._allow_advert(pubkey, now)
             if not allowed:
-                logger.warning(f"Dropping advert {pubkey[:16]}...: {reason}")
+                logger.warning(f"Dropping advert from '{node_name}' ({pubkey[:16]}...): {reason}")
                 packet.mark_do_not_retransmit()
                 packet.drop_reason = reason
+                
+                # Track recent drop
+                self._recent_drops.append({
+                    "pubkey": pubkey[:16],
+                    "name": node_name,
+                    "reason": reason,
+                    "timestamp": now
+                })
+                # Keep only last N drops
+                if len(self._recent_drops) > self._max_recent_drops:
+                    self._recent_drops.pop(0)
+                
                 return
             
             # Skip our own adverts
