@@ -52,8 +52,8 @@ repeater:
     # Refill interval in seconds (10 hours)
     refill_interval_seconds: 36000
     # Optional hard minimum spacing between adverts from same pubkey
-    # Set 0 to disable min-interval checks
-    min_interval_seconds: 3600
+    # Set 0 to disable (recommended - mesh retransmissions are normal in active networks)
+    min_interval_seconds: 0
 
   # Penalty box for repeat advert limit violations (per pubkey)
   advert_penalty_box:
