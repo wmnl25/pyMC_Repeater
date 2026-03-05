@@ -46,6 +46,7 @@ def _make_config(**overrides) -> dict:
         },
         "mesh": {
             "global_flood_allow": True,
+            "loop_detect": "off",
         },
         "delays": {
             "tx_delay_factor": 1.0,
@@ -675,6 +676,46 @@ class TestGlobalFloodPolicy:
         handler.config["mesh"]["global_flood_allow"] = False
         pkt = _make_transport_flood_packet()
         # Will call _check_transport_codes which will fail (no storage keys)
+        result = handler.flood_forward(pkt)
+        assert result is None
+
+
+class TestFloodLoopDetection:
+    """MeshCore-style loop detection for flood forwarding."""
+
+    def test_loop_detect_off_allows_looped_path(self, handler):
+        handler.config["mesh"]["loop_detect"] = "off"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, 0x11, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is not None
+
+    def test_loop_detect_minimal_drops_at_four(self, handler):
+        handler.config["mesh"]["loop_detect"] = "minimal"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, LOCAL_HASH, LOCAL_HASH, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is None
+        assert "loop detected" in (pkt.drop_reason or "").lower()
+
+    def test_loop_detect_minimal_allows_below_threshold(self, handler):
+        handler.config["mesh"]["loop_detect"] = "minimal"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, LOCAL_HASH, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is not None
+
+    def test_loop_detect_moderate_drops_at_two(self, handler):
+        handler.config["mesh"]["loop_detect"] = "moderate"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, 0x22, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is None
+
+    def test_loop_detect_strict_drops_at_one(self, handler):
+        handler.config["mesh"]["loop_detect"] = "strict"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([0x33, LOCAL_HASH, 0x44]))
         result = handler.flood_forward(pkt)
         assert result is None
 

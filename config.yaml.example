@@ -115,6 +115,10 @@ mesh:
   # Individual transport keys can override this setting
   global_flood_allow: true
 
+  # Flood loop detection mode
+  # off = disabled, minimal = allow up to 3 self-hashes, moderate = allow up to 1, strict = allow 0
+  loop_detect: minimal
+
 # Multiple Identity Configuration (Optional)
 # Define additional identities for the repeater to manage
 # Each identity operates independently with its own key pair and configuration
