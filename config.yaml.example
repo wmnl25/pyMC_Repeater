@@ -41,6 +41,53 @@ repeater:
   # with its node information (node type 2 - repeater)
   allow_discovery: true
 
+  # Incoming advert rate limiter (per advert public key)
+  # Uses a token bucket to smooth bursts.
+  advert_rate_limit:
+    # Master switch for token bucket limiting
+    enabled: false
+    # Max burst size allowed immediately per pubkey
+    # Keep this small for long advert intervals.
+    bucket_capacity: 2
+    # Number of tokens added each refill interval
+    refill_tokens: 1
+    # Refill interval in seconds (10 hours)
+    refill_interval_seconds: 36000
+    # Optional hard minimum spacing between adverts from same pubkey
+    # Set 0 to disable (recommended - mesh retransmissions are normal in active networks)
+    min_interval_seconds: 0
+
+  # Penalty box for repeat advert limit violations (per pubkey)
+  advert_penalty_box:
+    # Master switch for escalating cooldowns
+    enabled: false
+    # Number of violations within decay window before cooldown starts
+    violation_threshold: 2
+    # Reset violation count if pubkey stays quiet for this long
+    violation_decay_seconds: 43200
+    # First penalty duration in seconds
+    base_penalty_seconds: 21600
+    # Exponential growth factor for repeated violations
+    penalty_multiplier: 2.0
+    # Maximum penalty duration cap
+    max_penalty_seconds: 86400
+
+  # Adaptive rate limiting based on mesh activity
+  # Rate limits scale with mesh busyness: quiet mesh = lenient, busy mesh = strict
+  advert_adaptive:
+    # Master switch for adaptive scaling
+    enabled: false
+    # EWMA smoothing factor (0.0-1.0, higher = faster response)
+    ewma_alpha: 0.1
+    # Seconds without metrics change before tier change takes effect (hysteresis)
+    hysteresis_seconds: 300
+    # Tier thresholds based on adverts per minute EWMA
+    thresholds:
+      quiet_max: 0.05         # Below this = QUIET tier (no limiting)
+      normal_max: 0.20        # Below this = NORMAL tier (1x limits)
+      busy_max: 0.50          # Below this = BUSY tier (0.5x capacity)
+      # Above busy_max = CONGESTED tier (0.25x capacity)
+
   # Security settings for login/authentication (shared across all identities)
   security:
     # Maximum number of authenticated clients (across all identities)
@@ -69,6 +116,10 @@ mesh:
   # true = allow flooding globally, false = deny flooding globally
   # Individual transport keys can override this setting
   global_flood_allow: true
+
+  # Flood loop detection mode
+  # off = disabled, minimal = allow up to 3 self-hashes, moderate = allow up to 1, strict = allow 0
+  loop_detect: minimal
 
 # Multiple Identity Configuration (Optional)
 # Define additional identities for the repeater to manage
@@ -149,9 +200,6 @@ radio:
 
   # Sync word (LoRa network ID)
   sync_word: 13380
-
-  # Enable CRC checking
-  crc_enabled: true
 
   # Use implicit header mode
   implicit_header: false

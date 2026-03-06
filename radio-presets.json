@@ -26,6 +26,14 @@
                     "coding_rate": "5"
                 },
                 {
+                    "title": "Australia: NSW (Wide)",
+                    "description": "915.800MHz / SF11 / BW250 / CR5",
+                    "frequency": "915.800",
+                    "spreading_factor": "11",
+                    "bandwidth": "250",
+                    "coding_rate": "5"
+                },
+                {
                     "title": "Australia (Narrow)",
                     "description": "916.575MHz / SF7 / BW62.5 / CR8",
                     "frequency": "916.575",
