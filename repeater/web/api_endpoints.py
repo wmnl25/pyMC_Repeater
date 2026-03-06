@@ -1598,10 +1598,20 @@ class APIEndpoints:
                     self.config["kiss"]["baud_rate"] = int(data["kiss_baud_rate"])
                     applied.append("kiss.baud_rate")
 
+            # Update flood loop detection mode
+            if "loop_detect" in data:
+                mode = str(data["loop_detect"]).strip().lower()
+                if mode not in ("off", "minimal", "moderate", "strict"):
+                    return self._error("loop_detect must be one of: off, minimal, moderate, strict")
+                if "mesh" not in self.config:
+                    self.config["mesh"] = {}
+                self.config["mesh"]["loop_detect"] = mode
+                applied.append(f"loop_detect={mode}")
+
             if not applied:
                 return self._error("No valid settings provided")
 
-            live_sections = ["repeater", "delays", "radio"]
+            live_sections = ["repeater", "delays", "radio", "mesh"]
             if "kiss" in self.config:
                 live_sections.append("kiss")
             # Save to config file and live update daemon in one operation
