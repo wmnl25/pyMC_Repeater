@@ -411,14 +411,10 @@ EOF
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
 
-    # Uninstall any existing pymc_core to prevent cached/stale module issues
-    echo "Removing any existing pymc_core installation..."
-    python3 -m pip uninstall -y pymc_core || true
-    echo "Installing fresh pymc_core from GitHub (feat/companion)..."
-    python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall "pymc_core[hardware]@git+https://github.com/rightup/pyMC_core.git@feat/companion"
-    echo ""
-
-    if python3 -m pip install --break-system-packages --no-cache-dir .[hardware]; then
+    # Install with --force-reinstall to ensure fresh pymc_core from GitHub
+    # This reads pymc_core Git URL from pyproject.toml and reinstalls all dependencies
+    echo "Installing pymc_repeater with fresh dependencies from pyproject.toml..."
+    if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
 
@@ -726,25 +722,16 @@ EOF
         echo "Note: Using optimized binary wheels for faster installation"
         echo ""
 
-        # Uninstall any existing pymc_core to prevent cached/stale module issues
-        echo "Removing any existing pymc_core installation..."
-        python3 -m pip uninstall -y pymc_core || true
-        echo "Installing fresh pymc_core from GitHub (feat/companion)..."
-        python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall "pymc_core[hardware]@git+https://github.com/rightup/pyMC_core.git@feat/companion"
-        echo ""
-
-        # Upgrade packages with fresh dependency state
-        if python3 -m pip install --break-system-packages --no-cache-dir --upgrade --upgrade-strategy eager .[hardware]; then
+        # Install with --force-reinstall to ensure fresh pymc_core from GitHub
+        # This reads pymc_core Git URL from pyproject.toml and reinstalls all dependencies
+        echo "Upgrading pymc_repeater with fresh dependencies from pyproject.toml..."
+        if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall .[hardware]; then
             echo ""
-            echo "✓ Package and dependencies updated successfully!"
+            echo "✓ Package and dependencies upgraded successfully!"
         else
             echo ""
-            echo "⚠ Package update failed, but continuing..."
+            echo "⚠ Package upgrade failed, but continuing..."
         fi
-
-
-        echo ""
-        echo "✓ All packages including pymc_core reinstalled successfully"
 
 
         echo "[8/9] Starting service..."
