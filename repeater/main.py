@@ -4,7 +4,7 @@ import os
 import sys
 import time
 
-from repeater.companion.utils import validate_companion_node_name
+from repeater.companion.utils import validate_companion_node_name, normalize_companion_identity_key
 from repeater.config import get_radio_for_board, load_config, save_config
 from repeater.config_manager import ConfigManager
 from repeater.engine import RepeaterHandler
@@ -385,6 +385,10 @@ class RepeaterDaemon:
         sqlite_handler = None
         if self.repeater_handler and self.repeater_handler.storage:
             sqlite_handler = self.repeater_handler.storage.sqlite_handler
+        if not sqlite_handler and companions_config:
+            logger.warning(
+                "Companion persistence disabled: no storage (contacts/channels will not survive restart or disconnect)"
+            )
 
         radio_config = (
             self.repeater_handler.radio_config
@@ -404,7 +408,7 @@ class RepeaterDaemon:
 
                 if isinstance(identity_key, str):
                     try:
-                        identity_key_bytes = bytes.fromhex(identity_key)
+                        identity_key_bytes = bytes.fromhex(normalize_companion_identity_key(identity_key))
                     except ValueError as e:
                         logger.error(f"Companion '{name}' identity_key invalid hex: {e}")
                         continue
@@ -567,7 +571,7 @@ class RepeaterDaemon:
 
         if isinstance(identity_key, str):
             try:
-                identity_key_bytes = bytes.fromhex(identity_key)
+                identity_key_bytes = bytes.fromhex(normalize_companion_identity_key(identity_key))
             except ValueError as e:
                 raise ValueError(f"Companion '{name}' identity_key invalid hex: {e}") from e
         elif isinstance(identity_key, bytes):

@@ -164,3 +164,13 @@ class CompanionFrameServer(_BaseFrameServer):
             self.companion_hash,
             channels,
         )
+
+    async def stop(self) -> None:
+        """Persist contacts and channels before stopping (so they survive daemon restart)."""
+        if self.sqlite_handler:
+            try:
+                await self._save_contacts()
+                await self._save_channels()
+            except Exception as e:
+                logger.warning("Failed to persist contacts/channels on stop: %s", e)
+        await super().stop()
