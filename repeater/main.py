@@ -151,6 +151,19 @@ class RepeaterDaemon:
             self.dispatcher.register_fallback_handler(self._router_callback)
             logger.info("Packet router registered as fallback (catches all packets)")
 
+            # Set default path hash mode for flood 0-hop packets (adverts, etc.)
+            path_hash_mode = self.config.get("mesh", {}).get("path_hash_mode", 0)
+            if path_hash_mode not in (0, 1, 2):
+                logger.warning(
+                    f"Invalid mesh.path_hash_mode={path_hash_mode}, must be 0/1/2; using 0"
+                )
+                path_hash_mode = 0
+            self.dispatcher.set_default_path_hash_mode(path_hash_mode)
+            mode_names = {0: "1-byte", 1: "2-byte", 2: "3-byte"}
+            logger.info(
+                f"Path hash mode set to {mode_names[path_hash_mode]} (mesh.path_hash_mode={path_hash_mode})"
+            )
+
             # Create processing helpers (handlers created internally)
             self.trace_helper = TraceHelper(
                 local_hash=self.local_hash,

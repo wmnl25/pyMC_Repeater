@@ -918,6 +918,9 @@ class RepeaterHandler(BaseHandler):
                     "rx_delay_base": delays_config.get("rx_delay_base", 0.0),
                 },
                 "web": self.config.get("web", {}),  # Include web configuration
+                "mesh": {
+                    "path_hash_mode": self.config.get("mesh", {}).get("path_hash_mode", 0),
+                },
             },
             "public_key": None,
         }
