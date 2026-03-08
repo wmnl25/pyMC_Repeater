@@ -2411,6 +2411,8 @@ class APIEndpoints:
                     "tcp_port": settings.get("tcp_port", 5000),
                     "bind_address": settings.get("bind_address", "0.0.0.0"),
                 }
+                if "tcp_timeout" in settings:
+                    comp_settings["tcp_timeout"] = settings["tcp_timeout"]
                 new_identity = {
                     "name": name,
                     "identity_key": identity_key,
@@ -2609,7 +2611,7 @@ class APIEndpoints:
                         identity["settings"] = {}
                     # Only allow companion settings
                     for k, v in data["settings"].items():
-                        if k in ("node_name", "tcp_port", "bind_address"):
+                        if k in ("node_name", "tcp_port", "bind_address", "tcp_timeout"):
                             identity["settings"][k] = v
 
                 companions[identity_index] = identity

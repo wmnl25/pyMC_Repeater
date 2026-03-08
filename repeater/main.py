@@ -432,6 +432,8 @@ class RepeaterDaemon:
                 node_name = settings.get("node_name", name)
                 tcp_port = settings.get("tcp_port", 5000)
                 bind_address = settings.get("bind_address", "0.0.0.0")
+                tcp_timeout_raw = settings.get("tcp_timeout", 120)
+                client_idle_timeout_sec = None if tcp_timeout_raw == 0 else int(tcp_timeout_raw)
 
                 def _make_sync_node_name_to_config(companion_name: str):
                     """Return a callback that syncs node_name to config for this companion (binds name at creation)."""
@@ -525,6 +527,7 @@ class RepeaterDaemon:
                     companion_hash=companion_hash_str,
                     port=tcp_port,
                     bind_address=bind_address,
+                    client_idle_timeout_sec=client_idle_timeout_sec,
                     sqlite_handler=sqlite_handler,
                     local_hash=self.local_hash,
                     stats_getter=self._get_companion_stats,
@@ -544,7 +547,7 @@ class RepeaterDaemon:
 
                 logger.info(
                     f"Loaded companion '{name}': hash=0x{companion_hash:02x}, "
-                    f"port={tcp_port}, bind={bind_address}"
+                    f"port={tcp_port}, bind={bind_address}, client_idle_timeout_sec={client_idle_timeout_sec}"
                 )
 
             except Exception as e:
@@ -609,6 +612,8 @@ class RepeaterDaemon:
         node_name = settings.get("node_name", name)
         tcp_port = settings.get("tcp_port", 5000)
         bind_address = settings.get("bind_address", "0.0.0.0")
+        tcp_timeout_raw = settings.get("tcp_timeout", 120)
+        client_idle_timeout_sec = None if tcp_timeout_raw == 0 else int(tcp_timeout_raw)
 
         bridge = RepeaterCompanionBridge(
             identity=identity,
@@ -675,6 +680,7 @@ class RepeaterDaemon:
             companion_hash=companion_hash_str,
             port=tcp_port,
             bind_address=bind_address,
+            client_idle_timeout_sec=client_idle_timeout_sec,
             sqlite_handler=sqlite_handler,
             local_hash=self.local_hash,
             stats_getter=self._get_companion_stats,
@@ -694,7 +700,7 @@ class RepeaterDaemon:
 
         logger.info(
             f"Hot-reload: Loaded companion '{name}': hash=0x{companion_hash:02x}, "
-            f"port={tcp_port}, bind={bind_address}"
+            f"port={tcp_port}, bind={bind_address}, client_idle_timeout_sec={client_idle_timeout_sec}"
         )
 
     async def _on_raw_rx_for_companions(self, data: bytes, rssi: int, snr: float) -> None:

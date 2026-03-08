@@ -166,11 +166,13 @@ identities:
     #     node_name: "RepeaterCompanion"
     #     tcp_port: 5000
     #     bind_address: "0.0.0.0"
+    #     tcp_timeout: 120   # seconds; default 120 when omitted; 0 = disable (no timeout)
     # - name: "BotCompanion"
     #   identity_key: "another_companion_identity_key_hex"
     #   settings:
     #     node_name: "meshcore-bot"
     #     tcp_port: 5001
+    #     tcp_timeout: 120   # seconds; default 120 when omitted; 0 = disable (no timeout)
 
 # Radio hardware type
 # Supported:
