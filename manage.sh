@@ -393,7 +393,7 @@ exec python3 -m pip install \
     --break-system-packages \
     --no-cache-dir \
     --force-reinstall \
-    "git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}[hardware]"
+    "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
 UPGRADEEOF
     chmod 0755 /usr/local/bin/pymc-do-upgrade
 
@@ -726,7 +726,7 @@ exec python3 -m pip install \
     --break-system-packages \
     --no-cache-dir \
     --force-reinstall \
-    "git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}[hardware]"
+    "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
 UPGRADEEOF
         chmod 0755 /usr/local/bin/pymc-do-upgrade
         echo "    ✓ Permissions updated"

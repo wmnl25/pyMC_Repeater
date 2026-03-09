@@ -376,7 +376,7 @@ def _do_install() -> None:
 
     if is_root:
         install_spec = (
-            f"git+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}.git@{channel}[hardware]"
+            f"pymc_repeater[hardware] @ git+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}.git@{channel}"
         )
         _state.append_line(f"[pyMC updater] Running as root – direct pip install")
         _state.append_line(f"[pyMC updater] Target: {install_spec}")
