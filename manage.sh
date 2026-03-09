@@ -372,9 +372,30 @@ EOF
     mkdir -p /etc/sudoers.d
     cat > /etc/sudoers.d/pymc-repeater <<'EOF'
 # Allow repeater user to manage the pymc-repeater service without password
-repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater, /usr/local/bin/pymc-do-upgrade
 EOF
     chmod 0440 /etc/sudoers.d/pymc-repeater
+
+    echo ">>> Installing OTA upgrade wrapper..."
+    cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
+#!/bin/bash
+# pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+set -e
+CHANNEL="${1:-main}"
+# Validate: only allow safe git ref characters
+if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
+    echo "Invalid channel name: $CHANNEL" >&2
+    exit 1
+fi
+export PIP_ROOT_USER_ACTION=ignore
+exec python3 -m pip install \
+    --break-system-packages \
+    --no-cache-dir \
+    --force-reinstall \
+    "git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}[hardware]"
+UPGRADEEOF
+    chmod 0755 /usr/local/bin/pymc-do-upgrade
 
     echo "75"; echo "# Starting service..."
     systemctl enable "$SERVICE_NAME"
@@ -685,9 +706,29 @@ EOF
         mkdir -p /etc/sudoers.d
         cat > /etc/sudoers.d/pymc-repeater <<'EOF'
 # Allow repeater user to manage the pymc-repeater service without password
-repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater, /usr/local/bin/pymc-do-upgrade
 EOF
         chmod 0440 /etc/sudoers.d/pymc-repeater
+        # Install / refresh OTA upgrade wrapper
+        cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
+#!/bin/bash
+# pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+set -e
+CHANNEL="${1:-main}"
+# Validate: only allow safe git ref characters
+if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
+    echo "Invalid channel name: $CHANNEL" >&2
+    exit 1
+fi
+export PIP_ROOT_USER_ACTION=ignore
+exec python3 -m pip install \
+    --break-system-packages \
+    --no-cache-dir \
+    --force-reinstall \
+    "git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}[hardware]"
+UPGRADEEOF
+        chmod 0755 /usr/local/bin/pymc-do-upgrade
         echo "    ✓ Permissions updated"
 
         echo "[7/9] Reloading systemd..."
@@ -846,6 +887,7 @@ uninstall_repeater() {
         echo "50"; echo "# Removing polkit and sudoers rules..."
         rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules
         rm -f /etc/sudoers.d/pymc-repeater
+        rm -f /usr/local/bin/pymc-do-upgrade
 
         echo "60"; echo "# Removing installation..."
         rm -rf "$INSTALL_DIR"

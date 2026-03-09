@@ -16,6 +16,7 @@ from .auth.middleware import require_auth
 from .auth_endpoints import AuthAPIEndpoints
 from .cad_calibration_engine import CADCalibrationEngine
 from .companion_endpoints import CompanionAPIEndpoints
+from .update_endpoints import UpdateAPIEndpoints
 
 logger = logging.getLogger("HTTPServer")
 
@@ -113,6 +114,14 @@ logger = logging.getLogger("HTTPServer")
 # DELETE /api/room_message?room_name=General&message_id=123 - Delete specific message
 # DELETE /api/room_messages_clear?room_name=General - Clear all messages in room
 
+# OTA Updates
+# GET    /api/update/status          - Current + latest version, channel, state
+# POST   /api/update/check           - Force fresh GitHub version check
+# POST   /api/update/install         - Start background upgrade; stream via /progress
+# GET    /api/update/progress        - SSE stream of live install log lines
+# GET    /api/update/channels        - List available release channels (branches)
+# POST   /api/update/set_channel     - Switch release channel {"channel": "dev"}
+
 # Setup Wizard
 # GET    /api/needs_setup - Check if repeater needs initial setup
 # GET    /api/hardware_options - Get available hardware configurations
@@ -162,6 +171,9 @@ class APIEndpoints:
         self.companion = CompanionAPIEndpoints(
             daemon_instance, event_loop, self.config, self.config_manager
         )
+
+        # Create nested update object for /api/update/* routes
+        self.update = UpdateAPIEndpoints()
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
