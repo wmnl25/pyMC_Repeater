@@ -252,22 +252,20 @@ def _parse_dev_number(version_str: str) -> Optional[int]:
 
 def _has_update(installed: str, latest: str) -> bool:
     """
-    Compare installed vs latest version.
 
-    For dev-versioned strings (both contain .devN):
-        Compare the dev numbers numerically so that
-        installed=1.0.6.dev200 vs latest=1.0.6.dev191 → False (already ahead).
-
-    For static versions or mismatched types:
-        Simple string inequality.
     """
     if installed == latest:
         return False
+    try:
+        from packaging.version import Version
+        return Version(latest) > Version(installed)
+    except Exception:
+        pass
+    # Fallback: dev-number comparison only when base version is identical
     installed_dev = _parse_dev_number(installed)
     latest_dev = _parse_dev_number(latest)
     if installed_dev is not None and latest_dev is not None:
         return latest_dev > installed_dev
-    # Static release comparison
     return installed != latest
 
 
@@ -276,7 +274,8 @@ def _fetch_latest_version(channel: str) -> str:
     Return the latest available version string for *channel*.
 
     For static-versioned channels (e.g. main after a release commit):
-        Uses the GitHub tags API -> e.g. "1.0.5"
+        Reads the pinned version directly from pyproject.toml on that branch,
+        so a tag created on a different branch doesn't bleed through.
 
     For dynamic-versioned channels (dev, feature branches using setuptools_scm):
         Uses GET /compare/{tag}...{channel} to count commits ahead of the
@@ -284,7 +283,7 @@ def _fetch_latest_version(channel: str) -> str:
         what setuptools_scm would produce on that branch.
         has_update is then True when  branch_dev_number > installed_dev_number.
     """
-    base_tag = _get_latest_tag()  # always needed; single API call
+    base_tag = _get_latest_tag()  # always needed for dynamic branches
 
     if _branch_is_dynamic(channel):
         compare_url = f"{GITHUB_API_BASE}/compare/{base_tag}...{channel}"
@@ -296,8 +295,17 @@ def _fetch_latest_version(channel: str) -> str:
         except Exception:
             return base_tag  # fallback: show the tag
 
-    # Static version channel — the tag IS the release version
-    return base_tag
+    # Static version channel — read the pinned version from pyproject.toml on
+    # that branch directly, so tags created on other branches don't affect it.
+    try:
+        toml_url = f"{GITHUB_RAW_BASE}/{channel}/pyproject.toml"
+        toml_text = _fetch_url(toml_url, timeout=8)
+        m = re.search(r'^version\s*=\s*["\']([0-9][^"\']*)["\']', toml_text, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return base_tag  # last-resort fallback
 
 
 def _fetch_branches() -> List[str]:
