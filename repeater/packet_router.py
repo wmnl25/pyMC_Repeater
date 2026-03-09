@@ -13,6 +13,11 @@ from pymc_core.node.handlers.protocol_request import ProtocolRequestHandler
 from pymc_core.node.handlers.protocol_response import ProtocolResponseHandler
 from pymc_core.node.handlers.text import TextMessageHandler
 from pymc_core.node.handlers.trace import TraceHandler
+from pymc_core.protocol.constants import (
+    PH_ROUTE_MASK,
+    ROUTE_TYPE_DIRECT,
+    ROUTE_TYPE_TRANSPORT_DIRECT,
+)
 
 logger = logging.getLogger("PacketRouter")
 
@@ -27,6 +32,15 @@ def _companion_dedup_key(packet) -> str | None:
         return packet.calculate_packet_hash().hex().upper()
     except Exception:
         return None
+
+
+def _is_direct_final_hop(packet) -> bool:
+    """True if packet is DIRECT (or TRANSPORT_DIRECT) with empty path — we're the final destination."""
+    route = getattr(packet, "header", 0) & PH_ROUTE_MASK
+    if route != ROUTE_TYPE_DIRECT and route != ROUTE_TYPE_TRANSPORT_DIRECT:
+        return False
+    path = getattr(packet, "path", None)
+    return not path or len(path) == 0
 
 
 class PacketRouter:
@@ -197,15 +211,14 @@ class PacketRouter:
                 self._record_for_ui(packet, metadata)
 
         elif payload_type == AckHandler.payload_type():
-            # ACK has no dest in payload (4-byte CRC only); deliver to all bridges so sender sees send_confirmed
+            # ACK has no dest in payload (4-byte CRC only); deliver to all bridges so sender sees send_confirmed.
+            # Do not set processed_by_injection so packet also reaches engine for DIRECT forwarding when we're a middle hop.
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             for bridge in companion_bridges.values():
                 try:
                     await bridge.process_received_packet(packet)
                 except Exception as e:
                     logger.debug(f"Companion bridge ACK error: {e}")
-            processed_by_injection = True
-            self._record_for_ui(packet, metadata)
 
         elif payload_type == TextMessageHandler.payload_type():
             dest_hash = packet.payload[0] if packet.payload else None
@@ -226,8 +239,7 @@ class PacketRouter:
             if dest_hash is not None and dest_hash in companion_bridges:
                 if self._should_deliver_path_to_companions(packet):
                     await companion_bridges[dest_hash].process_received_packet(packet)
-                processed_by_injection = True
-                self._record_for_ui(packet, metadata)
+                # Do not set processed_by_injection so packet also reaches engine for DIRECT forwarding when we're a middle hop.
             elif companion_bridges and self._should_deliver_path_to_companions(packet):
                 # Dest not in bridges: path-return with ephemeral dest (e.g. multi-hop login).
                 # Deliver to all bridges; each will try to decrypt and ignore if not relevant.
@@ -241,8 +253,7 @@ class PacketRouter:
                     dest_hash or 0,
                     len(companion_bridges),
                 )
-                processed_by_injection = True
-                self._record_for_ui(packet, metadata)
+                # Do not set processed_by_injection so packet also reaches engine for DIRECT forwarding when we're a middle hop.
             elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
 
@@ -251,6 +262,7 @@ class PacketRouter:
             # Deliver to the bridge that is the destination, or to all bridges when the
             # response is addressed to this repeater (path-based reply: firmware sends
             # to first hop instead of original requester).
+            # Do not set processed_by_injection so packet also reaches engine for DIRECT forwarding when we're a middle hop.
             dest_hash = packet.payload[0] if packet.payload and len(packet.payload) >= 1 else None
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             local_hash = getattr(self.daemon, "local_hash", None)
@@ -263,8 +275,6 @@ class PacketRouter:
                     )
                 except Exception as e:
                     logger.debug(f"Companion bridge RESPONSE error: {e}")
-                processed_by_injection = True
-                self._record_for_ui(packet, metadata)
             elif dest_hash == local_hash and companion_bridges:
                 # Response addressed to this repeater (e.g. path-based reply to first hop)
                 for bridge in companion_bridges.values():
@@ -277,8 +287,6 @@ class PacketRouter:
                     dest_hash,
                     len(companion_bridges),
                 )
-                processed_by_injection = True
-                self._record_for_ui(packet, metadata)
             elif companion_bridges:
                 # Dest not in bridges and not local: likely ANON_REQ response (dest = ephemeral
                 # sender hash). Deliver to all bridges; each will try to decrypt and ignore if
@@ -293,12 +301,15 @@ class PacketRouter:
                     dest_hash or 0,
                     len(companion_bridges),
                 )
+            if companion_bridges and _is_direct_final_hop(packet):
+                # DIRECT with empty path: we're the final hop; don't pass to engine (it would drop with "Direct: no path")
                 processed_by_injection = True
                 self._record_for_ui(packet, metadata)
 
         elif payload_type == ProtocolResponseHandler.payload_type():
             # PAYLOAD_TYPE_PATH (0x08): protocol responses (telemetry, binary, etc.).
             # Deliver at most once per logical packet so the client is not spammed with duplicates.
+            # Do not set processed_by_injection so packet also reaches engine for DIRECT forwarding when we're a middle hop.
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             if companion_bridges and self._should_deliver_path_to_companions(packet):
                 for bridge in companion_bridges.values():
@@ -306,7 +317,14 @@ class PacketRouter:
                         await bridge.process_received_packet(packet)
                     except Exception as e:
                         logger.debug(f"Companion bridge RESPONSE error: {e}")
-            if companion_bridges:
+            if companion_bridges and _is_direct_final_hop(packet):
+                # DIRECT with empty path: we're the final hop; ensure delivery to all bridges (anon)
+                if not self._should_deliver_path_to_companions(packet):
+                    for bridge in companion_bridges.values():
+                        try:
+                            await bridge.process_received_packet(packet)
+                        except Exception as e:
+                            logger.debug(f"Companion bridge RESPONSE (final hop) error: {e}")
                 processed_by_injection = True
                 self._record_for_ui(packet, metadata)
 
@@ -322,6 +340,15 @@ class PacketRouter:
                 if handled:
                     processed_by_injection = True
                     self._record_for_ui(packet, metadata)
+            elif companion_bridges and _is_direct_final_hop(packet):
+                # DIRECT with empty path: we're the final hop; deliver to all bridges for anon matching
+                for bridge in companion_bridges.values():
+                    try:
+                        await bridge.process_received_packet(packet)
+                    except Exception as e:
+                        logger.debug(f"Companion bridge REQ (final hop) error: {e}")
+                processed_by_injection = True
+                self._record_for_ui(packet, metadata)
 
         elif payload_type == GroupTextHandler.payload_type():
             # GRP_TXT: pass to all companions (they filter by channel); still forward

@@ -789,7 +789,6 @@ class RepeaterHandler(BaseHandler):
 
         self.mark_seen(packet)
 
-        original_path = list(packet.path)
         # Remove first hash entry (hash_size bytes)
         packet.path = bytearray(packet.path[hash_size:])
         packet.path_len = PathUtils.encode_path_len(hash_size, hop_count - 1)
