@@ -45,11 +45,24 @@ CHECK_CACHE_TTL = 600  # 10 minutes
 
 
 def _get_installed_version() -> str:
+    """
+    Return the highest dist-info version found for pymc_repeater across all
+    directories the running interpreter actually uses.
 
+    Search strategy (union of all three to cover venvs, system, dist-packages):
+      1. site.getsitepackages() / getusersitepackages()
+      2. sys.path entries that look like package directories
+      3. Fallback: importlib.metadata, then the in-process __version__
+
+    Sanity check: the running process __version__ is used as a version floor.
+    If the disk scan returns something older than what is actually running, we
+    return __version__ instead – an older dist-info is definitively stale.
+    """
     import glob
     import site as _site
+    import sys
 
-    # Collect all site-packages directories
+    # -- 1. Collect candidate directories ---------------------------------- #
     dirs: list = []
     try:
         dirs.extend(_site.getsitepackages())
@@ -59,7 +72,13 @@ def _get_installed_version() -> str:
         dirs.append(_site.getusersitepackages())
     except AttributeError:
         pass
+    # Also include every sys.path entry that looks like a package directory so
+    # venvs and Debian dist-packages paths are covered.
+    for p in sys.path:
+        if p and ("site-packages" in p or "dist-packages" in p) and p not in dirs:
+            dirs.append(p)
 
+    # -- 2. Scan for dist-info METADATA files ------------------------------ #
     pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
     candidates: list = []
     for site_dir in dirs:
@@ -75,28 +94,50 @@ def _get_installed_version() -> str:
             except OSError:
                 continue
 
+    # -- 3. Pick the highest candidate ------------------------------------- #
+    disk_version: Optional[str] = None
     if candidates:
         if len(candidates) == 1:
-            return candidates[0]
-        # Multiple dist-info dirs found (stale old version alongside new one).
-        # Return the highest so an old leftover dir doesn't mask the real version.
-        try:
-            from packaging.version import Version
-            return str(max(candidates, key=lambda v: Version(v)))
-        except Exception:
-            return candidates[-1]  # last found as a best-effort fallback
+            disk_version = candidates[0]
+        else:
+            try:
+                from packaging.version import Version
+                disk_version = str(max(candidates, key=lambda v: Version(v)))
+            except Exception:
+                # packaging unavailable – sort lexicographically as best-effort
+                disk_version = sorted(candidates)[-1]
 
-    # Fallback: importlib.metadata (may be stale but better than nothing)
+    # -- 4. Fallbacks when disk scan found nothing ------------------------- #
+    if disk_version is None:
+        try:
+            from importlib.metadata import version as _pkg_ver
+            disk_version = _pkg_ver(PACKAGE_NAME)
+        except Exception:
+            pass
+
+    if disk_version is None:
+        try:
+            from repeater import __version__
+            return __version__
+        except Exception:
+            return "unknown"
+
+    # -- 5. Sanity check: never return a version older than what's running -- #
+    # If the running process is already on a higher version than anything found
+    # on disk, the dist-info dirs are stale leftovers and __version__ is truth.
     try:
-        from importlib.metadata import version as _pkg_ver
-        return _pkg_ver(PACKAGE_NAME)
+        from repeater import __version__ as _running
+        from packaging.version import Version
+        if Version(_running) > Version(disk_version):
+            logger.debug(
+                f"[Update] Disk version {disk_version!r} < running {_running!r};"
+                " using running __version__ as installed version."
+            )
+            return _running
     except Exception:
         pass
-    try:
-        from repeater import __version__
-        return __version__
-    except Exception:
-        return "unknown"
+
+    return disk_version
 
 # Channels file – persisted so the choice survives daemon restarts
 _CHANNELS_FILE = "/var/lib/pymc_repeater/.update_channel"
