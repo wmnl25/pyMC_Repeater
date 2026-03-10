@@ -11,7 +11,6 @@ Type=simple
 User=repeater
 Group=repeater
 WorkingDirectory=/opt/pymc_repeater
-Environment="PYTHONPATH=/opt/pymc_repeater"
 
 # Start command - use python module directly with proper path
 ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.yaml
