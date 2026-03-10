@@ -380,15 +380,19 @@ EOF
     cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
 #!/bin/bash
 # pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
-# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel] [pretend-version]
 set -e
 CHANNEL="${1:-main}"
+PRETEND_VERSION="${2:-}"
 # Validate: only allow safe git ref characters
 if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
     echo "Invalid channel name: $CHANNEL" >&2
     exit 1
 fi
 export PIP_ROOT_USER_ACTION=ignore
+# If caller supplied a version string, tell setuptools_scm to use it (sudo
+# strips env vars so it is passed as a positional argument instead).
+[ -n "$PRETEND_VERSION" ] && export SETUPTOOLS_SCM_PRETEND_VERSION="$PRETEND_VERSION"
 exec python3 -m pip install \
     --break-system-packages \
     --no-cache-dir \
@@ -713,15 +717,19 @@ EOF
         cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
 #!/bin/bash
 # pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
-# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel] [pretend-version]
 set -e
 CHANNEL="${1:-main}"
+PRETEND_VERSION="${2:-}"
 # Validate: only allow safe git ref characters
 if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
     echo "Invalid channel name: $CHANNEL" >&2
     exit 1
 fi
 export PIP_ROOT_USER_ACTION=ignore
+# If caller supplied a version string, tell setuptools_scm to use it (sudo
+# strips env vars so it is passed as a positional argument instead).
+[ -n "$PRETEND_VERSION" ] && export SETUPTOOLS_SCM_PRETEND_VERSION="$PRETEND_VERSION"
 exec python3 -m pip install \
     --break-system-packages \
     --no-cache-dir \

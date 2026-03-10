@@ -133,11 +133,13 @@ def _get_installed_version() -> str:
                 f"[Update] Disk version {disk_version!r} < running {_running!r};"
                 " using running __version__ as installed version."
             )
-            return _running
+            # Strip PEP 440 local identifier (+gXXXXXX) – it only encodes
+            # the git hash and causes spurious mismatches with GitHub versions.
+            return re.sub(r'\+[a-zA-Z0-9.]+$', '', _running)
     except Exception:
         pass
 
-    return disk_version
+    return re.sub(r'\+[a-zA-Z0-9.]+$', '', disk_version)
 
 # Channels file – persisted so the choice survives daemon restarts
 _CHANNELS_FILE = "/var/lib/pymc_repeater/.update_channel"
@@ -640,7 +642,9 @@ def _do_install() -> None:
         ]
     elif _os.path.isfile(_UPGRADE_WRAPPER):
         _state.append_line(f"[pyMC updater] Using sudo wrapper: {_UPGRADE_WRAPPER}")
-        cmd = ["sudo", _UPGRADE_WRAPPER, channel]
+        # Pass the target version as $2 so the wrapper can set
+        # SETUPTOOLS_SCM_PRETEND_VERSION (sudo strips our env).
+        cmd = ["sudo", _UPGRADE_WRAPPER, channel, _state.latest_version or ""]
     else:
         msg = (
             f"Upgrade wrapper not found at {_UPGRADE_WRAPPER}. "
