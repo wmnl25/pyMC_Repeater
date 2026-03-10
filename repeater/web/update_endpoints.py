@@ -44,6 +44,13 @@ PACKAGE_NAME = "pymc_repeater"
 CHECK_CACHE_TTL = 600  # 10 minutes
 
 
+class _RateLimitError(Exception):
+    """Raised when GitHub returns HTTP 403 due to rate limiting."""
+    def __init__(self, msg: str, reset_at: Optional[datetime] = None):
+        super().__init__(msg)
+        self.reset_at = reset_at
+
+
 def _get_installed_version() -> str:
     """
     Return the highest dist-info version found for pymc_repeater across all
@@ -227,6 +234,8 @@ class _UpdateState:
         self.error_message: Optional[str] = None
         self.progress_lines: List[str] = []
         self._install_thread: Optional[threading.Thread] = None
+        # rate-limit backoff: don't call GitHub before this time (UTC)
+        self.rate_limit_until: Optional[datetime] = None
 
     # ------------------------------------------------------------------ #
     # Channel persistence                                                  #
@@ -284,6 +293,7 @@ class _UpdateState:
                 "last_checked": self.last_checked.isoformat() if self.last_checked else None,
                 "state": self.state,
                 "error": self.error_message,
+                "rate_limit_until": self.rate_limit_until.isoformat() if self.rate_limit_until else None,
             }
 
     def set_channel(self, channel: str) -> None:
@@ -320,6 +330,16 @@ class _UpdateState:
             self.error_message = msg
             self.last_checked = datetime.utcnow()
 
+    def _fail_check_ratelimit(self, msg: str, reset_at: Optional[datetime]) -> None:
+        """Like _fail_check but keeps existing version data intact and records
+        the reset time so we don't hammer GitHub until the window expires."""
+        with self._lock:
+            # Keep state as idle so the UI still shows version info
+            self.state = "idle"
+            self.error_message = msg
+            self.last_checked = datetime.utcnow()
+            self.rate_limit_until = reset_at
+
     def start_install(self, thread: threading.Thread) -> bool:
         with self._lock:
             if self.state == "installing":
@@ -354,11 +374,38 @@ _state = _UpdateState()
 # ---------------------------------------------------------------------------
 
 def _fetch_url(url: str, timeout: int = 10) -> str:
-    """Perform a simple GET and return text body, or raise on failure."""
+    """Perform a simple GET and return text body, or raise on failure.
+
+    Adds a GitHub token from the environment when available (raises the
+    unauthenticated rate limit from 60 → 5 000 requests / hour).
+    Raises _RateLimitError on HTTP 403 so callers can back off gracefully.
+    """
     installed = _get_installed_version()
-    req = urllib.request.Request(url, headers={"User-Agent": f"pymc-repeater/{installed}"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    headers = {"User-Agent": f"pymc-repeater/{installed}"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            # Try to read the reset timestamp from the response headers
+            reset_at: Optional[datetime] = None
+            try:
+                reset_ts = exc.headers.get("X-RateLimit-Reset")
+                if reset_ts:
+                    reset_at = datetime.utcfromtimestamp(int(reset_ts))
+            except Exception:
+                pass
+            reset_str = reset_at.strftime("%H:%M UTC") if reset_at else "a short while"
+            raise _RateLimitError(
+                f"GitHub API rate limit exceeded — resets at {reset_str}. "
+                "Set GITHUB_TOKEN env var to raise the limit to 5000 req/hr.",
+                reset_at=reset_at,
+            ) from exc
+        raise
 
 
 def _get_latest_tag() -> str:
@@ -579,11 +626,17 @@ def _do_check() -> None:
     channel = _state.channel
     try:
         latest = _fetch_latest_version(channel)
+        # Successful fetch — clear any previous rate-limit hold
+        with _state._lock:
+            _state.rate_limit_until = None
         _state._finish_check(latest)
         logger.info(
             f"[Update] Check complete – installed={_state.current_version} "
             f"latest={latest} channel={channel} has_update={_state.has_update}"
         )
+    except _RateLimitError as exc:
+        logger.warning(f"[Update] {exc}")
+        _state._fail_check_ratelimit(str(exc), exc.reset_at)
     except Exception as exc:
         msg = str(exc)
         _state._fail_check(msg)
@@ -741,6 +794,18 @@ class UpdateAPIEndpoints:
                 _state.last_checked = None
                 _state.latest_version = None
                 _state.has_update = False
+                _state.rate_limit_until = None  # force overrides backoff
+
+        # Respect GitHub rate-limit backoff window
+        if not force and _state.rate_limit_until is not None:
+            remaining = (_state.rate_limit_until - datetime.utcnow()).total_seconds()
+            if remaining > 0:
+                reset_str = _state.rate_limit_until.strftime("%H:%M UTC")
+                return self._ok({
+                    "message": f"GitHub rate limit active — resets at {reset_str}",
+                    "state": snap["state"],
+                    **snap,
+                })
 
         if not force and snap["last_checked"] is not None:
             age = (datetime.utcnow() - _state.last_checked).total_seconds()
