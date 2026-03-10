@@ -45,14 +45,7 @@ CHECK_CACHE_TTL = 600  # 10 minutes
 
 
 def _get_installed_version() -> str:
-    """
-    Read the currently installed package version directly from the dist-info
-    METADATA file on disk, bypassing Python's importlib.metadata cache.
 
-    importlib.metadata.version() is cached by the running Python process, so
-    after a manual `pip install --force-reinstall` it can return the old version
-    until the service restarts.  Reading the file directly is always fresh.
-    """
     import glob
     import site as _site
 
@@ -68,6 +61,7 @@ def _get_installed_version() -> str:
         pass
 
     pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
+    candidates: list = []
     for site_dir in dirs:
         for meta_dir in glob.glob(os.path.join(site_dir, pkg_glob)):
             metadata_path = os.path.join(meta_dir, "METADATA")
@@ -76,9 +70,21 @@ def _get_installed_version() -> str:
                     for line in fh:
                         line = line.strip()
                         if line.startswith("Version:"):
-                            return line.split(":", 1)[1].strip()
+                            candidates.append(line.split(":", 1)[1].strip())
+                            break
             except OSError:
                 continue
+
+    if candidates:
+        if len(candidates) == 1:
+            return candidates[0]
+        # Multiple dist-info dirs found (stale old version alongside new one).
+        # Return the highest so an old leftover dir doesn't mask the real version.
+        try:
+            from packaging.version import Version
+            return str(max(candidates, key=lambda v: Version(v)))
+        except Exception:
+            return candidates[-1]  # last found as a best-effort fallback
 
     # Fallback: importlib.metadata (may be stale but better than nothing)
     try:
@@ -94,6 +100,69 @@ def _get_installed_version() -> str:
 
 # Channels file – persisted so the choice survives daemon restarts
 _CHANNELS_FILE = "/var/lib/pymc_repeater/.update_channel"
+
+
+def _detect_channel_from_dist_info() -> Optional[str]:
+
+    import glob
+    import site as _site
+
+    dirs: list = []
+    try:
+        dirs.extend(_site.getsitepackages())
+    except AttributeError:
+        pass
+    try:
+        dirs.append(_site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
+
+    # Collect all candidates so we can pick the highest version's direct_url
+    candidates: list = []  # list of (version_str, direct_url_path)
+    for site_dir in dirs:
+        for meta_dir in glob.glob(os.path.join(site_dir, pkg_glob)):
+            direct_url_path = os.path.join(meta_dir, "direct_url.json")
+            if not os.path.isfile(direct_url_path):
+                continue
+            metadata_path = os.path.join(meta_dir, "METADATA")
+            ver = None
+            try:
+                with open(metadata_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if line.startswith("Version:"):
+                            ver = line.split(":", 1)[1].strip()
+                            break
+            except OSError:
+                continue
+            if ver:
+                candidates.append((ver, direct_url_path))
+
+    if not candidates:
+        return None
+
+    # Use the highest-version dist-info so a stale old one doesn't win
+    try:
+        from packaging.version import Version
+        candidates.sort(key=lambda t: Version(t[0]), reverse=True)
+    except Exception:
+        pass
+
+    _, best_url_path = candidates[0]
+    try:
+        with open(best_url_path, "r", encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+        vcs_info = data.get("vcs_info", {})
+        # ``requested_revision`` is only present when the user explicitly named
+        # a branch/tag; absent means HEAD of the default branch.
+        revision = vcs_info.get("requested_revision")
+        if revision and re.match(r'^[a-zA-Z0-9_./\-]+$', revision):
+            return revision
+    except Exception:
+        pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +198,19 @@ class _UpdateState:
                         return ch
         except OSError:
             pass
+        # No saved channel file – try to detect from the dist-info written
+        # by pip at install time so the initial default is correct.
+        detected = _detect_channel_from_dist_info()
+        if detected:
+            logger.info(f"[Update] Detected install channel from dist-info: '{detected}'")
+            # Persist it so future startups don't need to detect again
+            try:
+                os.makedirs(os.path.dirname(_CHANNELS_FILE), exist_ok=True)
+                with open(_CHANNELS_FILE, "w") as fh:
+                    fh.write(detected)
+            except OSError as exc:
+                logger.warning(f"Could not persist detected channel: {exc}")
+            return detected
         return "main"
 
     def _save_channel(self, channel: str) -> None:
@@ -284,6 +366,58 @@ def _parse_dev_number(version_str: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def _cleanup_stale_dist_info() -> None:
+    import glob
+    import shutil
+    import site as _site
+
+    dirs: list = []
+    try:
+        dirs.extend(_site.getsitepackages())
+    except AttributeError:
+        pass
+    try:
+        dirs.append(_site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
+
+    # Collect {path: version_str} for every pymc_repeater dist-info we find
+    found: dict = {}
+    for site_dir in dirs:
+        for meta_dir in glob.glob(os.path.join(site_dir, pkg_glob)):
+            metadata_path = os.path.join(meta_dir, "METADATA")
+            try:
+                with open(metadata_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line.startswith("Version:"):
+                            found[meta_dir] = line.split(":", 1)[1].strip()
+                            break
+            except OSError:
+                continue
+
+    if len(found) <= 1:
+        return  # nothing to clean up
+
+    try:
+        from packaging.version import Version
+        keep = max(found, key=lambda p: Version(found[p]))
+    except Exception:
+        return  # can't determine winner safely — leave everything alone
+
+    for path, ver in found.items():
+        if path == keep:
+            continue
+        try:
+            shutil.rmtree(path)
+            logger.info(f"[Update] Removed stale dist-info: {path} (version {ver})")
+            _state.append_line(f"[pyMC updater] Removed stale dist-info: {os.path.basename(path)}")
+        except Exception as exc:
+            logger.warning(f"[Update] Could not remove stale dist-info {path}: {exc}")
+
+
 def _has_update(installed: str, latest: str) -> bool:
     """
 
@@ -304,19 +438,7 @@ def _has_update(installed: str, latest: str) -> bool:
 
 
 def _fetch_latest_version(channel: str) -> str:
-    """
-    Return the latest available version string for *channel*.
 
-    For static-versioned channels (e.g. main after a release commit):
-        Reads the pinned version directly from pyproject.toml on that branch,
-        so a tag created on a different branch doesn't bleed through.
-
-    For dynamic-versioned channels (dev, feature branches using setuptools_scm):
-        Uses GET /compare/{tag}...{channel} to count commits ahead of the
-        last tag, then returns a version like "1.0.6.dev191" that mirrors
-        what setuptools_scm would produce on that branch.
-        has_update is then True when  branch_dev_number > installed_dev_number.
-    """
     base_tag = _get_latest_tag()  # always needed for dynamic branches
 
     if _branch_is_dynamic(channel):
@@ -343,16 +465,7 @@ def _fetch_latest_version(channel: str) -> str:
 
 
 def _fetch_changelog(channel: str, installed: str, max_commits: int = 50) -> List[dict]:
-    """
-    Return a list of commit dicts that are new since the installed version.
 
-    For dynamic branches (devN): compare base_tag...channel, then slice off
-    the first N commits which the user already has installed.
-
-    For static branches: compare installed_tag...channel HEAD.
-
-    Each entry: {sha, short_sha, message, title, author, date, url}
-    """
     base_tag = _get_latest_tag()
     installed_dev = _parse_dev_number(installed)
 
@@ -435,14 +548,7 @@ def _do_check() -> None:
 
 
 def _do_install() -> None:
-    """
-    Background thread: install updated package then restart the service.
 
-    Privilege strategy (root check → sudo wrapper → direct pip):
-      1. If running as root – call python3 -m pip directly.
-      2. Otherwise – use ``sudo /usr/local/bin/pymc-do-upgrade <channel>``
-         (installed and authorized by manage.sh).
-    """
     channel = _state.channel
 
     def _run(cmd: List[str], env: Optional[dict] = None) -> bool:
@@ -505,6 +611,7 @@ def _do_install() -> None:
     success = _run(cmd, env=env)
 
     if success:
+        _cleanup_stale_dist_info()
         _state.finish_install(True, f"Upgraded to latest on channel '{channel}'")
         _state.append_line("[pyMC updater] Restarting service in 3 seconds…")
         time.sleep(3)
@@ -523,10 +630,6 @@ def _do_install() -> None:
 # ---------------------------------------------------------------------------
 
 class UpdateAPIEndpoints:
-    """
-    Mounted at /api/update/ inside APIEndpoints.
-    All mutating endpoints require an authenticated user (Bearer JWT or API token).
-    """
 
     def _set_cors_headers(self, config: dict) -> None:
         if config.get("web", {}).get("cors_enabled", False):
@@ -553,13 +656,7 @@ class UpdateAPIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def status(self, **kwargs):
-        """
-        Return current update status without triggering a fresh check.
 
-        Response:
-            {success, current_version, latest_version, has_update,
-             channel, last_checked, state, error}
-        """
         if cherrypy.request.method == "OPTIONS":
             return ""
 
@@ -573,13 +670,7 @@ class UpdateAPIEndpoints:
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in(force=False)
     def check(self, **kwargs):
-        """
-        Force a fresh version check against GitHub.  Non-blocking – spawns a
-        background thread; poll /api/update/status for the result.
 
-        Response:
-            {success, message, state}
-        """
         if cherrypy.request.method == "OPTIONS":
             return ""
 
@@ -627,18 +718,7 @@ class UpdateAPIEndpoints:
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def install(self, **kwargs):
-        """
-        Start the upgrade process in a background thread.
 
-        The caller should open the SSE stream at /api/update/progress to
-        watch live output.  The service will restart automatically on success.
-
-        Optional JSON body:
-            {"force": true}   – install even if no update is detected
-
-        Response:
-            {success, message, state}
-        """
         if cherrypy.request.method == "OPTIONS":
             return ""
 
@@ -688,16 +768,7 @@ class UpdateAPIEndpoints:
     # ------------------------------------------------------------------ #
     @cherrypy.expose
     def progress(self, **kwargs):
-        """
-        Server-Sent Events stream that emits install log lines in real time.
 
-        Event types:
-            connected  – initial handshake
-            line       – one log line  {line: str}
-            status     – state change  {state: str}
-            keepalive  – heartbeat (every 5 s)
-            done       – stream finished  {state: str, error: str|null}
-        """
         cherrypy.response.headers["Content-Type"] = "text/event-stream"
         cherrypy.response.headers["Cache-Control"] = "no-cache"
         cherrypy.response.headers["X-Accel-Buffering"] = "no"
@@ -780,15 +851,7 @@ class UpdateAPIEndpoints:
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def set_channel(self, **kwargs):
-        """
-        Switch the release channel (branch) used for future update checks and installs.
 
-        JSON body:
-            {"channel": "dev"}
-
-        Response:
-            {success, channel, message}
-        """
         if cherrypy.request.method == "OPTIONS":
             return ""
 
@@ -823,17 +886,7 @@ class UpdateAPIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def changelog(self, **kwargs):
-        """
-        Return commits that are new since the installed version on the current channel.
 
-        Query params (optional):
-            channel  – override channel (defaults to active channel)
-            max      – max commits to return (default 40)
-
-        Response:
-            {success, channel, installed, latest, commits: [{sha, short_sha,
-             title, body, author, date, url}]}
-        """
         if cherrypy.request.method == "OPTIONS":
             return ""
 
