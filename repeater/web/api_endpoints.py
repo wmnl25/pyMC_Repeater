@@ -2098,11 +2098,21 @@ class APIEndpoints:
             if not target_id:
                 return self._error("Missing target_id parameter")
 
-            # Parse target hash (accepts hex string like "0xA5" or "a5")
+            # Derive byte width from path_hash_mode (issue #133):
+            # 0 = 1-byte (legacy), 1 = 2-byte, 2 = 3-byte
+            path_hash_mode = self.config.get("mesh", {}).get("path_hash_mode", 0)
+            byte_count = {0: 1, 1: 2, 2: 3}.get(path_hash_mode, 1)
+            hex_chars = byte_count * 2
+            max_hash = (1 << (byte_count * 8)) - 1
+
+            # Parse target hash (accepts hex string like "0xA5", "0xA5F0", or bare hex)
             try:
                 target_hash = int(target_id, 16) if isinstance(target_id, str) else int(target_id)
-                if target_hash < 0 or target_hash > 255:
-                    return self._error("target_id must be a valid byte (0x00-0xFF)")
+                if target_hash < 0 or target_hash > max_hash:
+                    return self._error(
+                        f"target_id must be a valid {byte_count}-byte hash "
+                        f"(0x00-0x{max_hash:0{hex_chars}X})"
+                    )
             except ValueError:
                 return self._error(f"Invalid target_id format: {target_id}")
 
@@ -2138,7 +2148,7 @@ class APIEndpoints:
 
                 # Send packet via router
                 await router.inject_packet(packet)
-                logger.info(f"Ping sent to 0x{target_hash:02x} with tag {trace_tag}")
+                logger.info(f"Ping sent to 0x{target_hash:0{hex_chars}x} with tag {trace_tag} (path_hash_mode={path_hash_mode})")
 
                 try:
                     await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -2171,12 +2181,13 @@ class APIEndpoints:
 
                     return self._success(
                         {
-                            "target_id": f"0x{target_hash:02x}",
+                            "target_id": f"0x{target_hash:0{hex_chars}x}",
                             "rtt_ms": round(rtt_ms, 2),
                             "snr_db": result["snr"],
                             "rssi": result["rssi"],
-                            "path": [f"0x{h:02x}" for h in result["path"]],
+                            "path": [f"0x{h:0{hex_chars}x}" for h in result["path"]],
                             "tag": trace_tag,
+                            "path_hash_mode": path_hash_mode,
                         },
                         message="Ping successful",
                     )
