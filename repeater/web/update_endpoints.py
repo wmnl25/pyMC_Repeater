@@ -643,6 +643,25 @@ def _do_check() -> None:
         logger.warning(f"[Update] Version check failed: {msg}")
 
 
+def _migrate_service_unit() -> None:
+    """Strip legacy PYTHONPATH and fix WorkingDirectory in the systemd service unit.
+    """
+    import subprocess as _sp
+    _SVC_UNIT = "/etc/systemd/system/pymc-repeater.service"
+    try:
+        _sp.run(["sed", "-i", "/^Environment=.*PYTHONPATH/d", _SVC_UNIT], check=False)
+        _sp.run(
+            ["sed", "-i",
+             "s|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|",
+             _SVC_UNIT],
+            check=False,
+        )
+        _sp.run(["systemctl", "daemon-reload"], check=False)
+        logger.info("[Update] Service unit migration applied (root path).")
+    except Exception as exc:
+        logger.warning(f"[Update] Service unit migration failed: {exc}")
+
+
 def _do_install() -> None:
 
     channel = _state.channel
@@ -681,6 +700,7 @@ def _do_install() -> None:
     is_root = (_os.geteuid() == 0)
 
     if is_root:
+        _migrate_service_unit()
         install_spec = (
             f"pymc_repeater[hardware] @ git+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}.git@{channel}"
         )
@@ -710,15 +730,21 @@ def _do_install() -> None:
 
     if success:
         _cleanup_stale_dist_info()
-        _state.finish_install(True, f"Upgraded to latest on channel '{channel}'")
         _state.append_line("[pyMC updater] Restarting service in 3 seconds…")
         time.sleep(3)
+        restart_ok = False
+        restart_msg = "Restart not attempted"
         try:
             from repeater.service_utils import restart_service
-            ok, msg = restart_service()
-            logger.info(f"[Update] Post-upgrade restart: {msg}")
+            restart_ok, restart_msg = restart_service()
+            logger.info(f"[Update] Post-upgrade restart: {restart_msg}")
         except Exception as exc:
+            restart_msg = str(exc)
             logger.warning(f"[Update] Could not restart service: {exc}")
+        if restart_ok:
+            _state.finish_install(True, f"Upgraded to latest on channel '{channel}' – service restarted")
+        else:
+            _state.finish_install(False, f"Upgrade succeeded but service restart failed: {restart_msg}")
     else:
         _state.finish_install(False, "pip install failed – see progress log for details")
 

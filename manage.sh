@@ -623,7 +623,9 @@ upgrade_repeater() {
 
         echo "[4/9] Installing files..."
         SCRIPT_DIR="$(dirname "$0")"
-        cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/ 2>/dev/null || true
+        if ! cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/; then
+            echo "    ⚠ Warning: Failed to update service file – old service file may remain"
+        fi
         cp "$SCRIPT_DIR/radio-settings.json" /var/lib/pymc_repeater/ 2>/dev/null || true
         cp "$SCRIPT_DIR/radio-presets.json" /var/lib/pymc_repeater/ 2>/dev/null || true
         echo "    ✓ Files updated"
