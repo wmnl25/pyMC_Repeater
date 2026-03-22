@@ -10,6 +10,11 @@ import cherrypy
 from pymc_core.protocol import CryptoUtils
 
 from repeater import __version__
+from repeater.companion.identity_resolve import (
+    derive_companion_public_key_hex,
+    find_companion_index,
+    heal_companion_empty_names,
+)
 from repeater.config import update_global_flood_policy
 
 from .auth.middleware import require_auth
@@ -2257,6 +2262,17 @@ class APIEndpoints:
             identities_config = self.config.get("identities", {})
             room_servers = identities_config.get("room_servers") or []
 
+            companions_cfg = identities_config.get("companions") or []
+            if heal_companion_empty_names(companions_cfg):
+                self.config.setdefault("identities", {})["companions"] = companions_cfg
+                if self.config_manager:
+                    if self.config_manager.save_to_file():
+                        logger.info(
+                            "Healed companion registration name(s): empty name -> companion_<pubkeyPrefix>"
+                        )
+                    else:
+                        logger.warning("Failed to save config after healing companion name(s)")
+
             # Enhance with config data (room servers)
             configured = []
             for room_config in room_servers:
@@ -2289,7 +2305,11 @@ class APIEndpoints:
             configured_companions = []
             for comp_config in companions:
                 name = comp_config.get("name")
-                identity_key = comp_config.get("identity_key", "")
+                raw_ik = comp_config.get("identity_key", "")
+                if isinstance(raw_ik, bytes):
+                    ik_hex = raw_ik.hex()
+                else:
+                    ik_hex = str(raw_ik)
                 settings = comp_config.get("settings", {})
 
                 matching = next(
@@ -2301,17 +2321,23 @@ class APIEndpoints:
                     None,
                 )
 
+                pk_display = None
+                if matching:
+                    pk_display = matching.get("public_key")
+                else:
+                    pk_display = derive_companion_public_key_hex(comp_config.get("identity_key"))
+
                 configured_companions.append(
                     {
                         "name": name,
                         "type": "companion",
                         "identity_key": (
-                            identity_key[:16] + "..." if len(identity_key) > 16 else identity_key
+                            ik_hex[:16] + "..." if len(ik_hex) > 16 else ik_hex
                         ),
-                        "identity_key_length": len(identity_key),
+                        "identity_key_length": len(ik_hex),
                         "settings": settings,
                         "hash": matching["hash"] if matching else None,
-                        "public_key": matching.get("public_key") if matching else None,
+                        "public_key": pk_display,
                         "registered": matching is not None,
                     }
                 )
@@ -2412,7 +2438,8 @@ class APIEndpoints:
             self._require_post()
             data = cherrypy.request.json or {}
 
-            name = data.get("name")
+            raw_name = data.get("name")
+            name = str(raw_name).strip() if raw_name is not None else ""
             identity_key = data.get("identity_key")
             identity_type = data.get("type", "room_server")
             settings = data.get("settings", {})
@@ -2463,7 +2490,7 @@ class APIEndpoints:
                         return self._error("Companion identity_key must be a valid hex string")
 
                 companions = identities_config.get("companions") or []
-                if any(c.get("name") == name for c in companions):
+                if any(str(c.get("name") or "").strip() == name for c in companions):
                     return self._error(f"Companion with name '{name}' already exists")
 
                 comp_settings = {
@@ -2484,7 +2511,7 @@ class APIEndpoints:
             else:
                 # Room server
                 room_servers = identities_config.get("room_servers") or []
-                if any(r.get("name") == name for r in room_servers):
+                if any(str(r.get("name") or "").strip() == name for r in room_servers):
                     return self._error(f"Identity with name '{name}' already exists")
 
                 new_identity = {
@@ -2625,8 +2652,9 @@ class APIEndpoints:
             data = cherrypy.request.json or {}
 
             name = data.get("name")
-            if not name:
-                return self._error("Missing required field: name")
+            name_s = str(name).strip() if name is not None else ""
+            lookup_identity_key = data.get("lookup_identity_key")
+            public_key_prefix = data.get("public_key_prefix")
 
             identity_type = data.get("type", "room_server")
             if identity_type not in ["room_server", "companion"]:
@@ -2638,17 +2666,26 @@ class APIEndpoints:
 
             if identity_type == "companion":
                 companions = identities_config.get("companions") or []
-                identity_index = next(
-                    (i for i, c in enumerate(companions) if c.get("name") == name), None
-                )
-                if identity_index is None:
-                    return self._error(f"Companion '{name}' not found")
+                if name_s:
+                    identity_index, err = find_companion_index(companions, name=name_s)
+                else:
+                    identity_index, err = find_companion_index(
+                        companions,
+                        identity_key=lookup_identity_key,
+                        public_key_prefix=public_key_prefix,
+                    )
+                if err:
+                    return self._error(err)
                 identity = companions[identity_index]
+                resolved_name = str(identity.get("name") or "").strip()
 
                 if "new_name" in data:
                     new_name = data["new_name"]
+                    new_name = str(new_name).strip() if new_name is not None else ""
+                    if not new_name:
+                        return self._error("new_name cannot be empty")
                     if any(
-                        c.get("name") == new_name
+                        str(c.get("name") or "").strip() == new_name
                         for i, c in enumerate(companions)
                         if i != identity_index
                     ):
@@ -2662,7 +2699,9 @@ class APIEndpoints:
                             key_bytes = bytes.fromhex(new_key)
                             if len(key_bytes) in (32, 64):
                                 identity["identity_key"] = new_key
-                                logger.info(f"Updated identity_key for companion '{name}'")
+                                logger.info(
+                                    f"Updated identity_key for companion '{resolved_name}'"
+                                )
                         except ValueError:
                             pass
 
@@ -2679,27 +2718,41 @@ class APIEndpoints:
                 saved = self.config_manager.save_to_file()
                 if not saved:
                     return self._error("Failed to save configuration to file")
-                logger.info(f"Updated companion: {name}")
-                message = f"Companion '{name}' updated successfully. Restart required to apply changes."
+                logger.info(f"Updated companion: {resolved_name}")
+                message = (
+                    f"Companion '{resolved_name}' updated successfully. "
+                    "Restart required to apply changes."
+                )
                 return self._success(identity, message=message)
 
             # Room server path
+            if not name_s:
+                return self._error("Missing required field: name")
+
             room_servers = identities_config.get("room_servers") or []
             identity_index = next(
-                (i for i, r in enumerate(room_servers) if r.get("name") == name), None
+                (
+                    i
+                    for i, r in enumerate(room_servers)
+                    if str(r.get("name") or "").strip() == name_s
+                ),
+                None,
             )
 
             if identity_index is None:
-                return self._error(f"Identity '{name}' not found")
+                return self._error(f"Identity '{name_s}' not found")
 
             # Update fields
             identity = room_servers[identity_index]
 
             if "new_name" in data:
                 new_name = data["new_name"]
+                new_name = str(new_name).strip() if new_name is not None else ""
+                if not new_name:
+                    return self._error("new_name cannot be empty")
                 # Check if new name conflicts
                 if any(
-                    r.get("name") == new_name
+                    str(r.get("name") or "").strip() == new_name
                     for i, r in enumerate(room_servers)
                     if i != identity_index
                 ):
@@ -2716,7 +2769,7 @@ class APIEndpoints:
                         # Validate it's proper hex
                         bytes.fromhex(new_key)
                         identity["identity_key"] = new_key
-                        logger.info(f"Updated identity_key for '{name}'")
+                        logger.info(f"Updated identity_key for '{name_s}'")
                     except ValueError:
                         # Invalid hex, silently ignore
                         pass
@@ -2741,7 +2794,7 @@ class APIEndpoints:
             if not saved:
                 return self._error("Failed to save configuration to file")
 
-            logger.info(f"Updated identity: {name}")
+            logger.info(f"Updated identity: {name_s}")
 
             # Hot reload - re-register identity if key changed or name changed
             registration_success = False
@@ -2795,18 +2848,18 @@ class APIEndpoints:
 
                 except Exception as reg_error:
                     logger.error(
-                        f"Failed to hot reload identity {name}: {reg_error}", exc_info=True
+                        f"Failed to hot reload identity {name_s}: {reg_error}", exc_info=True
                     )
 
             if needs_reload:
                 message = (
-                    f"Identity '{name}' updated successfully and changes applied immediately!"
+                    f"Identity '{name_s}' updated successfully and changes applied immediately!"
                     if registration_success
-                    else f"Identity '{name}' updated successfully. Restart required to apply changes."
+                    else f"Identity '{name_s}' updated successfully. Restart required to apply changes."
                 )
             else:
                 message = (
-                    f"Identity '{name}' updated successfully (settings only, no reload needed)."
+                    f"Identity '{name_s}' updated successfully (settings only, no reload needed)."
                 )
 
             return self._success(identity, message=message)
@@ -2819,9 +2872,10 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
-    def delete_identity(self, name=None, type=None):
+    def delete_identity(self, name=None, type=None, lookup_identity_key=None, public_key_prefix=None):
         """
         DELETE /api/delete_identity?name=<name>&type=<room_server|companion> - Delete an identity
+        Companions may also be deleted with lookup_identity_key or public_key_prefix when name is empty.
         """
         # Enable CORS for this endpoint only if configured
         self._set_cors_headers()
@@ -2835,8 +2889,7 @@ class APIEndpoints:
                 cherrypy.response.headers["Allow"] = "DELETE"
                 raise cherrypy.HTTPError(405, "Method not allowed. This endpoint requires DELETE.")
 
-            if not name:
-                return self._error("Missing name parameter")
+            name_s = str(name).strip() if name is not None else ""
 
             identity_type = (type or "room_server").lower()
             if identity_type not in ["room_server", "companion"]:
@@ -2847,39 +2900,59 @@ class APIEndpoints:
             identities_config = self.config.get("identities", {})
 
             if identity_type == "companion":
+                if not name_s and not lookup_identity_key and not public_key_prefix:
+                    return self._error(
+                        "Missing name parameter or lookup_identity_key or public_key_prefix"
+                    )
                 companions = identities_config.get("companions") or []
-                initial_count = len(companions)
-                companions = [c for c in companions if c.get("name") != name]
-                if len(companions) == initial_count:
-                    return self._error(f"Companion '{name}' not found")
+                if name_s:
+                    idx, err = find_companion_index(companions, name=name_s)
+                else:
+                    idx, err = find_companion_index(
+                        companions,
+                        identity_key=lookup_identity_key,
+                        public_key_prefix=public_key_prefix,
+                    )
+                if err:
+                    return self._error(err)
+                resolved_name = str(companions[idx].get("name") or "").strip()
+                companions.pop(idx)
                 self.config["identities"]["companions"] = companions
                 saved = self.config_manager.save_to_file()
                 if not saved:
                     return self._error("Failed to save configuration to file")
-                logger.info(f"Deleted companion: {name}")
+                logger.info(f"Deleted companion: {resolved_name}")
                 unregister_success = False
                 if self.daemon_instance and hasattr(self.daemon_instance, "identity_manager"):
                     identity_manager = self.daemon_instance.identity_manager
-                    if name in identity_manager.named_identities:
-                        del identity_manager.named_identities[name]
-                        logger.info(f"Removed companion {name} from named_identities")
+                    if resolved_name and resolved_name in identity_manager.named_identities:
+                        del identity_manager.named_identities[resolved_name]
+                        logger.info(f"Removed companion {resolved_name} from named_identities")
                         unregister_success = True
                 message = (
-                    f"Companion '{name}' deleted successfully and deactivated immediately!"
+                    f"Companion '{resolved_name}' deleted successfully and deactivated immediately!"
                     if unregister_success
-                    else f"Companion '{name}' deleted successfully. Restart required to fully remove."
+                    else (
+                        f"Companion '{resolved_name}' deleted successfully. "
+                        "Restart required to fully remove."
+                    )
                 )
-                return self._success({"name": name}, message=message)
+                return self._success({"name": resolved_name}, message=message)
 
             # Room server path
+            if not name_s:
+                return self._error("Missing name parameter")
+
             room_servers = identities_config.get("room_servers") or []
 
             # Find and remove the identity
             initial_count = len(room_servers)
-            room_servers = [r for r in room_servers if r.get("name") != name]
+            room_servers = [
+                r for r in room_servers if str(r.get("name") or "").strip() != name_s
+            ]
 
             if len(room_servers) == initial_count:
-                return self._error(f"Identity '{name}' not found")
+                return self._error(f"Identity '{name_s}' not found")
 
             # Update config
             self.config["identities"]["room_servers"] = room_servers
@@ -2888,7 +2961,7 @@ class APIEndpoints:
             if not saved:
                 return self._error("Failed to save configuration to file")
 
-            logger.info(f"Deleted identity: {name}")
+            logger.info(f"Deleted identity: {name_s}")
 
             unregister_success = False
             if self.daemon_instance:
@@ -2897,9 +2970,9 @@ class APIEndpoints:
                         identity_manager = self.daemon_instance.identity_manager
 
                         # Remove from named_identities dict
-                        if name in identity_manager.named_identities:
-                            del identity_manager.named_identities[name]
-                            logger.info(f"Removed identity {name} from named_identities")
+                        if name_s in identity_manager.named_identities:
+                            del identity_manager.named_identities[name_s]
+                            logger.info(f"Removed identity {name_s} from named_identities")
                             unregister_success = True
 
                         # Note: We don't remove from identities dict (keyed by hash)
@@ -2909,16 +2982,16 @@ class APIEndpoints:
 
                 except Exception as unreg_error:
                     logger.error(
-                        f"Failed to unregister identity {name}: {unreg_error}", exc_info=True
+                        f"Failed to unregister identity {name_s}: {unreg_error}", exc_info=True
                     )
 
             message = (
-                f"Identity '{name}' deleted successfully and deactivated immediately!"
+                f"Identity '{name_s}' deleted successfully and deactivated immediately!"
                 if unregister_success
-                else f"Identity '{name}' deleted successfully. Restart required to fully remove."
+                else f"Identity '{name_s}' deleted successfully. Restart required to fully remove."
             )
 
-            return self._success({"name": name}, message=message)
+            return self._success({"name": name_s}, message=message)
 
         except cherrypy.HTTPError:
             raise
