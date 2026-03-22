@@ -1304,7 +1304,9 @@ paths:
     post:
       tags: [Identities]
       summary: Create new identity
-      description: Create a new repeater or room server identity
+      description: |
+        Create a new repeater or room server identity.
+        `name` must be non-empty after trimming leading/trailing whitespace (whitespace-only values are rejected).
       requestBody:
         required: true
         content:
@@ -1318,7 +1320,9 @@ paths:
                   minLength: 1
                   maxLength: 64
                   pattern: '^[a-zA-Z0-9_\-\s]+$'
-                  description: Identity name (alphanumeric, spaces, hyphens, underscores)
+                  description: |
+                    Identity registration name (alphanumeric, spaces, hyphens, underscores).
+                    Trimmed; must not be empty or whitespace-only.
                   example: "General Chat"
                 identity_key:
                   type: string
@@ -1408,6 +1412,10 @@ paths:
     get:
       tags: [Identities]
       summary: List all identities
+      description: |
+        Returns configured room servers and companions plus runtime registration info.
+        Companion entries with missing or blank registration names are assigned a stable
+        `companion_<pubkeyPrefix>` name derived from the identity key and persisted when possible.
       responses:
         '200':
           description: List of identities
@@ -1455,7 +1463,11 @@ paths:
     put:
       tags: [Identities]
       summary: Update identity
-      description: Modify an existing identity's configuration
+      description: |
+        Modify an existing identity's configuration.
+        For `room_server`, `name` is required to locate the identity.
+        For `companion`, provide `name` OR `lookup_identity_key` OR `public_key_prefix`
+        (at least 8 hex characters for prefix lookups) when the registration name is unknown.
       security:
         - BearerAuth: []
         - ApiKeyAuth: []
@@ -1465,14 +1477,26 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
               properties:
+                type:
+                  type: string
+                  enum: [room_server, companion]
+                  default: room_server
                 name:
                   type: string
-                  description: Current identity name
+                  description: Current identity registration name (required for room_server; optional for companion if lookup fields are set)
+                lookup_identity_key:
+                  type: string
+                  description: |
+                    Companion only: hex private identity key (full or unique prefix, min 8 hex chars)
+                    to locate the companion when `name` is omitted.
+                public_key_prefix:
+                  type: string
+                  description: |
+                    Companion only: ed25519 public key hex prefix (min 8 hex chars) to locate the companion when `name` is omitted.
                 new_name:
                   type: string
-                  description: New identity name (optional)
+                  description: New identity name (optional; must be non-empty if provided)
                 identity_key:
                   type: string
                   description: New identity key (optional)
@@ -1491,17 +1515,42 @@ paths:
     delete:
       tags: [Identities]
       summary: Delete identity
-      description: Remove an identity from the system
+      description: |
+        Remove an identity from the system.
+        For `room_server`, `name` is required.
+        For `companion`, provide `name` OR `lookup_identity_key` OR `public_key_prefix`
+        (at least 8 hex characters for prefix lookups).
       security:
         - BearerAuth: []
         - ApiKeyAuth: []
       parameters:
         - name: name
           in: query
-          required: true
+          required: false
           schema:
             type: string
-          description: Identity name to delete
+          description: Identity registration name to delete (required for room_server)
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [room_server, companion]
+          description: Identity kind (default room_server)
+        - name: lookup_identity_key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Companion only: hex identity key (full or unique prefix, min 8 hex chars) when `name` is omitted.
+        - name: public_key_prefix
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Companion only: public key hex prefix (min 8 hex chars) when `name` is omitted.
       responses:
         '200':
           description: Identity deleted
