@@ -31,6 +31,13 @@ class MeshCLI:
         self.identity = identity
         self.storage_handler = storage_handler
 
+        # Store event loop reference for thread-safe scheduling
+        import asyncio
+        try:
+            self._event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._event_loop = None
+
         # Get repeater config shortcut
         self.repeater_config = config.get("repeater", {})
 
@@ -262,17 +269,10 @@ class MeshCLI:
                 await asyncio.sleep(1.5)
                 await self.send_advert_callback()
 
-            # Schedule on the running event loop (may be called from a non-async thread)
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(delayed_advert())
-            except RuntimeError:
-                # Called from a sync context (e.g. CherryPy HTTP thread)
-                loop = asyncio.get_event_loop_policy().get_event_loop()
-                if loop.is_running():
-                    loop.call_soon_threadsafe(asyncio.ensure_future, delayed_advert())
-                else:
-                    return "Error: Event loop not running"
+            if self._event_loop and self._event_loop.is_running():
+                asyncio.run_coroutine_threadsafe(delayed_advert(), self._event_loop)
+            else:
+                return "Error: Event loop not available"
 
             logger.info("Advert scheduled for sending (1.5s delay)")
             return "OK - Advert sent"
