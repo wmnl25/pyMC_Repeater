@@ -77,6 +77,23 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if "mesh" not in config:
         config["mesh"] = {}
 
+    # Ensure repeater.security exists with defaults for upgrades from older configs
+    if "repeater" not in config:
+        config["repeater"] = {}
+    if "security" not in config["repeater"]:
+        logger.warning(
+            "No 'security' section found under 'repeater' in config. "
+            "Adding defaults — please review and update passwords."
+        )
+        config["repeater"]["security"] = {
+            "max_clients": 1,
+            "admin_password": "admin123",
+            "guest_password": "guest123",
+            "allow_read_only": False,
+            "jwt_secret": "",
+            "jwt_expiry_minutes": 60,
+        }
+
     # Only auto-generate identity_key if not provided
     if "identity_key" not in config["mesh"]:
         config["mesh"]["identity_key"] = _load_or_create_identity_key()
