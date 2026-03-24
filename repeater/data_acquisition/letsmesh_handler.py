@@ -322,8 +322,9 @@ class _BrokerConnection:
         logger.info(f"JWT token expiring soon for {self.broker['name']}, refreshing...")
         self._running = False
         self._jwt_refresh_timer = None
-        self.client.disconnect()  # Triggers clean disconnect, then reconnect via timer
+
         self._schedule_reconnect(reason="JWT token expiry")
+        self.client.disconnect()
 
 
 # ====================================================================
