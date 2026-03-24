@@ -4308,6 +4308,47 @@ class APIEndpoints:
             return self._error(e)
 
     # ======================
+    # CLI Command Endpoint
+    # ======================
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    @require_auth
+    def cli(self):
+        """Execute a CLI command on the running repeater.
+        POST /api/cli {"command": "get name"}
+        Returns {"success": true, "reply": "..."}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            self._require_post()
+            data = cherrypy.request.json
+            command = data.get("command", "").strip()
+            if not command:
+                return self._error("Missing 'command' field")
+
+            if not self.daemon_instance or not hasattr(self.daemon_instance, "text_helper"):
+                return self._error("Repeater not initialized")
+            text_helper = self.daemon_instance.text_helper
+            if not text_helper or not hasattr(text_helper, "cli") or not text_helper.cli:
+                return self._error("CLI handler not available")
+
+            reply = text_helper.cli.handle_command(
+                sender_pubkey=b"api-cli",
+                command=command,
+                is_admin=True,
+            )
+            return self._success({"reply": reply})
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"CLI endpoint error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    # ======================
     # OpenAPI Documentation
     # ======================
 
