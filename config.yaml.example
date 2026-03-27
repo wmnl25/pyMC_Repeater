@@ -20,6 +20,11 @@ repeater:
   # If not specified, a new identity will be generated
   identity_file: null
 
+  # Identity key (alternative to identity_file)
+  # Store the private key directly in config as binary (set by convert_firmware_key.sh)
+  # If both identity_file and identity_key are set, identity_key takes precedence
+  # identity_key: null
+
   # Duplicate packet cache TTL in seconds
   cache_ttl: 3600
 

@@ -94,9 +94,14 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "jwt_expiry_minutes": 60,
         }
 
-    # Only auto-generate identity_key if not provided
-    if "identity_key" not in config["mesh"]:
-        config["mesh"]["identity_key"] = _load_or_create_identity_key()
+    # Only auto-generate identity_key if not provided under repeater section
+    if "identity_key" not in config["repeater"]:
+        # Check if identity_file is specified
+        identity_file = config["repeater"].get("identity_file")
+        if identity_file:
+            config["repeater"]["identity_key"] = _load_or_create_identity_key(path=identity_file)
+        else:
+            config["repeater"]["identity_key"] = _load_or_create_identity_key()
 
     if os.getenv("PYMC_REPEATER_LOG_LEVEL"):
         if "logging" not in config:

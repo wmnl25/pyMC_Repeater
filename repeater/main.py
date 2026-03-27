@@ -116,7 +116,7 @@ class RepeaterDaemon:
             logger.info("Identity manager initialized")
 
             # Set up default repeater identity (not managed by identity manager)
-            identity_key = self.config.get("mesh", {}).get("identity_key")
+            identity_key = self.config.get("repeater", {}).get("identity_key")
             if not identity_key:
                 logger.error("No identity key found in configuration. Cannot init repeater.")
                 raise RuntimeError("Identity key is required for repeater operation")

@@ -152,20 +152,20 @@ if output_format == "yaml":
         sys.exit(1)
 
     # Check for existing key
-    if 'mesh' in config and 'identity_key' in config['mesh']:
-        existing = config['mesh']['identity_key']
+    if 'repeater' in config and 'identity_key' in config['repeater']:
+        existing = config['repeater']['identity_key']
         if isinstance(existing, bytes):
             print(f"WARNING: Existing identity_key found ({len(existing)} bytes)")
         else:
             print(f"WARNING: Existing identity_key found")
         print()
 
-    # Ensure mesh section exists
-    if 'mesh' not in config:
-        config['mesh'] = {}
+    # Ensure repeater section exists
+    if 'repeater' not in config:
+        config['repeater'] = {}
 
     # Store the full 64-byte key
-    config['mesh']['identity_key'] = key_bytes
+    config['repeater']['identity_key'] = key_bytes
 
     # Save config atomically
     backup_path = f"{config_path}.backup.{Path(config_path).stat().st_mtime_ns}"
@@ -220,7 +220,7 @@ else:
                 config = yaml.safe_load(f) or {}
             
             # Check if identity_key exists in config
-            if 'mesh' in config and 'identity_key' in config['mesh']:
+            if 'repeater' in config and 'identity_key' in config['repeater']:
                 print(f"Updating {config_path} to use identity.key file...")
                 
                 # Create backup
@@ -230,7 +230,7 @@ else:
                 print(f"Created backup: {backup_path}")
                 
                 # Remove identity_key from config
-                del config['mesh']['identity_key']
+                del config['repeater']['identity_key']
                 
                 # Save updated config
                 with open(config_path, 'w') as f:
@@ -240,7 +240,7 @@ else:
                 print(f"✓ Config will now use {identity_path}")
                 print()
             else:
-                print(f"✓ Config file already configured to use identity.key file")
+                print(f"✓ Config file already configured to use identity.key file (no repeater.identity_key found)")
                 print()
                 
         except Exception as e:
