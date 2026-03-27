@@ -4416,6 +4416,18 @@ class APIEndpoints:
                         if "identity_key" in entry:
                             entry["identity_key"] = "*** REDACTED ***"
 
+            # Ensure all bytes values are converted to hex for JSON serialisation
+            def _sanitize(obj):
+                if isinstance(obj, bytes):
+                    return obj.hex()
+                if isinstance(obj, dict):
+                    return {k: _sanitize(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_sanitize(v) for v in obj]
+                return obj
+
+            exported = _sanitize(exported)
+
             meta = {
                 "exported_at": datetime.utcnow().isoformat() + "Z",
                 "version": __version__,
