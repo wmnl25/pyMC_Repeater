@@ -4620,6 +4620,7 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
     def generate_vanity_key(self):
         """Generate a MeshCore Ed25519 key whose public key starts with a hex prefix.
 
