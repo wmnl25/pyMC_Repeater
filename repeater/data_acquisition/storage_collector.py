@@ -130,12 +130,12 @@ class StorageCollector:
 
         return stats
 
-    def record_packet(self, packet_record: dict, skip_letsmesh_if_invalid: bool = True):
-        """Record packet to storage and publish to MQTT/LetsMesh
+    def record_packet(self, packet_record: dict, skip_mqtt_if_invalid: bool = True):
+        """Record packet to storage and publish to MQTT
 
         Args:
             packet_record: Dictionary containing packet information
-            skip_letsmesh_if_invalid: If True, don't publish packets with drop_reason to LetsMesh
+            skip_mqtt_if_invalid: If True, don't publish packets with drop_reason to mqtt
         """
         logger.debug(
             f"Recording packet: type={packet_record.get('type')}, "
@@ -170,23 +170,23 @@ class StorageCollector:
             except Exception as e:
                 logger.debug(f"WebSocket broadcast failed: {e}")
 
-        # # Publish to LetsMesh if enabled (skip invalid packets if requested)
-        # if skip_letsmesh_if_invalid and packet_record.get("drop_reason"):
+        # # Publish to mqtt if enabled (skip invalid packets if requested)
+        # if skip_mqtt_if_invalid and packet_record.get("drop_reason"):
         #     logger.debug(
-        #         f"Skipping LetsMesh publish for packet with drop_reason: {packet_record.get('drop_reason')}"
+        #         f"Skipping mqtt publish for packet with drop_reason: {packet_record.get('drop_reason')}"
         #     )
         # else:
-        self._publish_to_letsmesh(packet_record)
+        self._publish_to_mqtt(packet_record)
 
-    def _publish_to_letsmesh(self, packet_record: dict):
-        """Publish packet to LetsMesh broker if enabled and allowed"""
+    def _publish_to_mqtt(self, packet_record: dict):
+        """Publish packet to mqtt broker if enabled and allowed"""
         if not self.mqtt_handler:
             return
 
         try:
             packet_type = packet_record.get("type")
             if packet_type is None:
-                logger.error("Cannot publish to LetsMesh: packet_record missing 'type' field")
+                logger.error("Cannot publish to mqtt: packet_record missing 'type' field")
                 return
 
             # if packet_type in self.disallowed_packet_types:
@@ -198,14 +198,14 @@ class StorageCollector:
                 packet_record, origin=node_name, origin_id=self.mqtt_handler.public_key
             )
 
-            if packet:                
+            if packet:
                 self.mqtt_handler.publish_packet(packet.to_dict())
-                logger.debug(f"Published packet type 0x{packet_type:02X} to LetsMesh")
+                logger.debug(f"Published packet type 0x{packet_type:02X} to mqtt")
             else:
-                logger.debug("Skipped LetsMesh publish: packet missing raw_packet data")
+                logger.debug("Skipped mqtt publish: packet missing raw_packet data")
 
         except Exception as e:
-            logger.error(f"Failed to publish packet to LetsMesh: {e}", exc_info=True)
+            logger.error(f"Failed to publish packet to mqtt: {e}", exc_info=True)
 
     def record_advert(self, advert_record: dict):
         self.sqlite_handler.store_advert(advert_record)

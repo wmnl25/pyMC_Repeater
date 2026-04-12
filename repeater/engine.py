@@ -364,8 +364,8 @@ class RepeaterHandler(BaseHandler):
             try:
                 # Only skip LetsMesh for actual invalid/bad packets
                 invalid_reasons = ["Invalid advert packet", "Empty payload", "Path too long"]
-                skip_letsmesh = drop_reason in invalid_reasons if drop_reason else False
-                self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=skip_letsmesh)
+                skip_mqtt = drop_reason in invalid_reasons if drop_reason else False
+                self.storage.record_packet(packet_record, skip_mqtt_if_invalid=skip_mqtt)
             except Exception as e:
                 logger.error(f"Failed to store packet record: {e}")
 
@@ -450,7 +450,7 @@ class RepeaterHandler(BaseHandler):
             dst_hash,
         )
         try:
-            self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+            self.storage.record_packet(packet_record, skip_mqtt_if_invalid=False)
         except Exception as e:
             logger.error(f"Failed to store packet record (record_packet_only): {e}")
             return
@@ -493,7 +493,7 @@ class RepeaterHandler(BaseHandler):
 
         if self.storage:
             try:
-                self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+                self.storage.record_packet(packet_record, skip_mqtt_if_invalid=False)
             except Exception as e:
                 logger.error(f"Failed to store duplicate record: {e}")
 
