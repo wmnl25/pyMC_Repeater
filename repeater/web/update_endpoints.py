@@ -84,6 +84,13 @@ def _get_installed_version() -> str:
     for p in sys.path:
         if p and ("site-packages" in p or "dist-packages" in p) and p not in dirs:
             dirs.append(p)
+    # Explicitly include the dedicated venv's site-packages
+    _venv_site = "/opt/pymc_repeater/venv/lib"
+    if os.path.isdir(_venv_site):
+        for child in os.listdir(_venv_site):
+            sp = os.path.join(_venv_site, child, "site-packages")
+            if os.path.isdir(sp) and sp not in dirs:
+                dirs.append(sp)
 
     # -- 2. Scan for dist-info METADATA files ------------------------------ #
     pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
@@ -470,6 +477,13 @@ def _cleanup_stale_dist_info() -> None:
         dirs.append(_site.getusersitepackages())
     except AttributeError:
         pass
+    # Also scan the dedicated venv's site-packages
+    _venv_site = "/opt/pymc_repeater/venv/lib"
+    if os.path.isdir(_venv_site):
+        for child in os.listdir(_venv_site):
+            sp = os.path.join(_venv_site, child, "site-packages")
+            if os.path.isdir(sp) and sp not in dirs:
+                dirs.append(sp)
 
     pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
 
@@ -655,15 +669,23 @@ def _do_check() -> None:
 
 
 def _migrate_service_unit() -> None:
-    """Strip legacy PYTHONPATH and fix WorkingDirectory in the systemd service unit.
+    """Strip legacy PYTHONPATH, fix WorkingDirectory, and ensure ExecStart
+    uses the venv python in the systemd service unit.
     """
     import subprocess as _sp
     _SVC_UNIT = "/etc/systemd/system/pymc-repeater.service"
+    _VENV_PYTHON = "/opt/pymc_repeater/venv/bin/python"
     try:
         _sp.run(["sed", "-i", "/^Environment=.*PYTHONPATH/d", _SVC_UNIT], check=False)
         _sp.run(
             ["sed", "-i",
              "s|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|",
+             _SVC_UNIT],
+            check=False,
+        )
+        _sp.run(
+            ["sed", "-i",
+             f"s|ExecStart=/usr/bin/python3|ExecStart={_VENV_PYTHON}|",
              _SVC_UNIT],
             check=False,
         )
@@ -702,8 +724,11 @@ def _do_install() -> None:
 
     import os as _os
     env = _os.environ.copy()
-    env["PIP_ROOT_USER_ACTION"] = "ignore"
     env["SETUPTOOLS_SCM_PRETEND_VERSION"] = _state.latest_version or "1.0.0"
+
+    _VENV_DIR = "/opt/pymc_repeater/venv"
+    _VENV_PIP = os.path.join(_VENV_DIR, "bin", "pip")
+    _VENV_PYTHON = os.path.join(_VENV_DIR, "bin", "python")
 
     _state.append_line(f"[pyMC updater] Installing from channel '{channel}'…")
 
@@ -712,22 +737,38 @@ def _do_install() -> None:
 
     if is_root:
         _migrate_service_unit()
+
+        # Ensure venv exists (migration from system-pip era)
+        if not os.path.isfile(_VENV_PYTHON):
+            _state.append_line("[pyMC updater] Creating venv (first-time migration)…")
+            _run(["python3", "-m", "venv", "--system-site-packages", _VENV_DIR], env=env)
+            _run([_VENV_PIP, "install", "--upgrade", "pip", "setuptools", "wheel"], env=env)
+
+        # Clean up system-level packages to avoid shadowing
+        _run(["python3", "-m", "pip", "uninstall", "-y", "pymc_repeater"], env=env)
+        _run(["python3", "-m", "pip", "uninstall", "-y", "pymc_core"], env=env)
+
+        # Remove stale source tree that could shadow the venv package
+        stale_src = "/opt/pymc_repeater/repeater"
+        if os.path.isdir(stale_src):
+            _state.append_line("[pyMC updater] Removing stale source tree…")
+            import shutil
+            shutil.rmtree(stale_src, ignore_errors=True)
+
         install_spec = (
             f"pymc_repeater[hardware] @ git+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}.git@{channel}"
         )
-        _state.append_line(f"[pyMC updater] Running as root – direct pip install")
+        _state.append_line(f"[pyMC updater] Running as root – venv pip install")
         _state.append_line(f"[pyMC updater] Target: {install_spec}")
         cmd = [
-            "python3", "-m", "pip", "install",
-            "--break-system-packages",
+            _VENV_PIP, "install",
+            "--upgrade",
             "--no-cache-dir",
-            "--force-reinstall",
             install_spec,
         ]
     elif _os.path.isfile(_UPGRADE_WRAPPER):
         _state.append_line(f"[pyMC updater] Using sudo wrapper: {_UPGRADE_WRAPPER}")
-        # Pass the target version as $2 so the wrapper can set
-        # SETUPTOOLS_SCM_PRETEND_VERSION (sudo strips our env).
+        # The wrapper handles venv creation/migration internally
         cmd = ["sudo", _UPGRADE_WRAPPER, channel, _state.latest_version or ""]
     else:
         msg = (

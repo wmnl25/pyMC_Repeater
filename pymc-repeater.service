@@ -12,8 +12,8 @@ User=repeater
 Group=repeater
 WorkingDirectory=/var/lib/pymc_repeater
 
-# Start command - use python module directly with proper path
-ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.yaml
+# Start command - use venv python to avoid system package conflicts
+ExecStart=/opt/pymc_repeater/venv/bin/python -m repeater.main --config /etc/pymc_repeater/config.yaml
 
 # Restart on failure
 Restart=on-failure
