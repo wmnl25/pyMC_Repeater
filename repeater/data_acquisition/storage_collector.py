@@ -199,7 +199,7 @@ class StorageCollector:
         """Record a batch of CRC errors detected since last poll."""
         crc_record = {"timestamp": time.time(), "count": count}
         self.sqlite_handler.store_crc_errors(crc_record)
-        #self.old_mqtt_handler.publish(crc_record, "crc_errors")
+        self.mqtt_handler.publish_mqtt("crc_errors", crc_record)
 
     def get_crc_error_count(self, hours: int = 24) -> int:
         return self.sqlite_handler.get_crc_error_count(hours)
