@@ -304,6 +304,8 @@ mqtt:
   # use_jwt_auth: true|false # Does this endpoint require JWT auth
   # username: "" # Username for basic auth. If empty or missing, uses anonymous access
   # password: "" # Password for basic auth. Required if username is set
+  # format: letsmesh|mqtt
+  # retain_status: true|false # Sets MQTT "retain" on status messages so they remain on the broker when disconnected. Also enforces a QOS of 1 (guaranteed delivery)
 
   # Block specific packet types from being published to the MQTT endpoint
   # If not specified or empty list, all types are published
