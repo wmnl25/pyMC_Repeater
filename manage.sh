@@ -4,11 +4,68 @@
 set -e
 
 INSTALL_DIR="/opt/pymc_repeater"
+VENV_DIR="$INSTALL_DIR/venv"
+VENV_PIP="$VENV_DIR/bin/pip"
+VENV_PYTHON="$VENV_DIR/bin/python"
 CONFIG_DIR="/etc/pymc_repeater"
 LOG_DIR="/var/log/pymc_repeater"
 SERVICE_USER="repeater"
 SERVICE_NAME="pymc-repeater"
 SILENT_MODE="${PYMC_SILENT:-${SILENT:-}}"
+
+# ---------------------------------------------------------------------------
+# Virtual-environment helpers
+# ---------------------------------------------------------------------------
+
+# Create (or re-create) the dedicated venv for pymc_repeater
+ensure_venv() {
+    if [ ! -x "$VENV_PYTHON" ]; then
+        echo ">>> Creating virtual environment at $VENV_DIR ..."
+        python3 -m venv --system-site-packages "$VENV_DIR"
+        # Upgrade pip inside the venv
+        "$VENV_PIP" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+    fi
+}
+
+# Migrate an existing system-pip install into the venv.
+# Idempotent: safe to call on every upgrade.
+migrate_to_venv() {
+    echo ">>> Checking for legacy system-pip installation..."
+
+    # 1. Ensure the venv exists
+    ensure_venv
+
+    # 2. Remove legacy PYTHONPATH from the service unit
+    local svc_unit="/etc/systemd/system/pymc-repeater.service"
+    if [ -f "$svc_unit" ]; then
+        if grep -q 'PYTHONPATH' "$svc_unit" 2>/dev/null; then
+            sed -i '/^Environment=.*PYTHONPATH/d' "$svc_unit"
+            echo "    ✓ Removed legacy PYTHONPATH from service unit"
+        fi
+        # 3. Fix WorkingDirectory if still pointing at old source
+        if grep -q 'WorkingDirectory=/opt/pymc_repeater' "$svc_unit" 2>/dev/null; then
+            sed -i 's|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|' "$svc_unit"
+            echo "    ✓ Fixed WorkingDirectory in service unit"
+        fi
+        # 4. Ensure ExecStart uses the venv python
+        if grep -q 'ExecStart=/usr/bin/python3' "$svc_unit" 2>/dev/null; then
+            sed -i "s|ExecStart=/usr/bin/python3|ExecStart=$VENV_PYTHON|" "$svc_unit"
+            echo "    ✓ Updated ExecStart to use venv python"
+        fi
+        systemctl daemon-reload
+    fi
+
+    # 5. Remove the package from system python (best-effort)
+    python3 -m pip uninstall -y pymc_repeater 2>/dev/null || true
+    python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+    echo "    ✓ Cleaned up system-level packages (if any)"
+
+    # 6. Remove stale source trees that could shadow the venv package
+    if [ -d "$INSTALL_DIR/repeater" ]; then
+        rm -rf "$INSTALL_DIR/repeater"
+        echo "    ✓ Removed stale source tree from $INSTALL_DIR/repeater"
+    fi
+}
 
 is_silent_flag() {
     case "${1:-}" in
@@ -96,9 +153,15 @@ is_enabled() {
 
 # Function to get current version
 get_version() {
-    # Read version from the pip-installed package in dist-packages
-    python3 -c "from importlib.metadata import version; print(version('pymc_repeater'))" 2>/dev/null \
-        || echo "not installed"
+    # Read version from the pip-installed package in the venv
+    if [ -x "$VENV_PYTHON" ]; then
+        "$VENV_PYTHON" -c "from importlib.metadata import version; print(version('pymc_repeater'))" 2>/dev/null \
+            || echo "not installed"
+    else
+        # Fallback: try system python for pre-migration installs
+        python3 -c "from importlib.metadata import version; print(version('pymc_repeater'))" 2>/dev/null \
+            || echo "not installed"
+    fi
 }
 
 # Function to get service status for display
@@ -272,12 +335,16 @@ install_repeater() {
 
     echo "25"; echo "# Installing system dependencies..."
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-rrdtool wget swig build-essential python3-dev
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
     # Install polkit (package name varies by distro version)
     DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 2>/dev/null \
         || DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd pkexec 2>/dev/null \
         || echo "    Warning: Could not install polkit (sudo fallback will be used)"
-    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+    # setuptools_scm needed for git version detection during build
+    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || python3 -m pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+
+    echo "28"; echo "# Creating virtual environment..."
+    ensure_venv
 
     # Install mikefarah yq v4 if not already installed
     if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
@@ -316,8 +383,12 @@ install_repeater() {
     fi
 
     echo "65"; echo "# Setting permissions..."
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
+    # Venv stays root-owned (pip runs as root); service user only needs read+execute
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     chmod 750 "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
+    # Ensure manage.sh and support files in INSTALL_DIR are accessible
+    chown root:root "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR"
     # Ensure the service user can create subdirectories in their home directory
     chmod 755 /var/lib/pymc_repeater
     # Pre-create the .config directory that the service will need
@@ -355,35 +426,46 @@ EOF
 set -e
 CHANNEL="${1:-main}"
 PRETEND_VERSION="${2:-}"
+VENV_DIR="/opt/pymc_repeater/venv"
+VENV_PIP="$VENV_DIR/bin/pip"
+VENV_PYTHON="$VENV_DIR/bin/python"
 # Validate: only allow safe git ref characters
 if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
     echo "Invalid channel name: $CHANNEL" >&2
     exit 1
 fi
-export PIP_ROOT_USER_ACTION=ignore
 # If caller supplied a version string, tell setuptools_scm to use it (sudo
 # strips env vars so it is passed as a positional argument instead).
 [ -n "$PRETEND_VERSION" ] && export SETUPTOOLS_SCM_PRETEND_VERSION="$PRETEND_VERSION"
-# Migration: remove legacy PYTHONPATH from service unit if present.
-# Old installs set PYTHONPATH=/opt/pymc_repeater which caused the service to
-# load from a stale source copy instead of the pip-installed dist-packages.
+# ---- Migration: ensure venv exists (handles upgrades from system-pip era) ----
+if [ ! -x "$VENV_PYTHON" ]; then
+    echo "[pymc-do-upgrade] Creating venv at $VENV_DIR ..."
+    python3 -m venv --system-site-packages "$VENV_DIR"
+    "$VENV_PIP" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+fi
+# ---- Migration: clean up legacy service unit issues ----
 SVC_UNIT=/etc/systemd/system/pymc-repeater.service
 if grep -q 'PYTHONPATH' "$SVC_UNIT" 2>/dev/null; then
     sed -i '/^Environment=.*PYTHONPATH/d' "$SVC_UNIT"
     systemctl daemon-reload
 fi
-# Migration: fix WorkingDirectory if it still points at the old source checkout.
-# /opt/pymc_repeater contains a repeater/ subdirectory which shadows the
-# pip-installed package, causing updates to have no effect on the running process.
 if grep -q 'WorkingDirectory=/opt/pymc_repeater' "$SVC_UNIT" 2>/dev/null; then
     sed -i 's|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|' "$SVC_UNIT"
     systemctl daemon-reload
 fi
-exec python3 -m pip install \
-    --break-system-packages \
+if grep -q 'ExecStart=/usr/bin/python3' "$SVC_UNIT" 2>/dev/null; then
+    sed -i "s|ExecStart=/usr/bin/python3|ExecStart=$VENV_PYTHON|" "$SVC_UNIT"
+    systemctl daemon-reload
+fi
+# ---- Remove stale source trees that shadow the venv package ----
+[ -d /opt/pymc_repeater/repeater ] && rm -rf /opt/pymc_repeater/repeater
+# ---- Remove old system-level packages to avoid confusion ----
+python3 -m pip uninstall -y pymc_repeater 2>/dev/null || true
+python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+# ---- Install into the venv ----
+exec "$VENV_PIP" install \
+    --upgrade \
     --no-cache-dir \
-    --force-reinstall \
-    --ignore-installed \
     "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
 UPGRADEEOF
     chmod 0755 /usr/local/bin/pymc-do-upgrade
@@ -405,9 +487,6 @@ UPGRADEEOF
     SCRIPT_DIR="$(dirname "$0")"
     cd "$SCRIPT_DIR"
 
-    # Suppress pip root user warnings
-    export PIP_ROOT_USER_ACTION=ignore
-
     # Calculate version from git for setuptools_scm
     if [ -d .git ]; then
         git fetch --tags 2>/dev/null || true
@@ -423,13 +502,12 @@ UPGRADEEOF
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
 
-    # Remove old pymc_core first so no stale .py/.pyc files linger
-    python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+    # Ensure venv exists
+    ensure_venv
 
-    # Install with --force-reinstall to ensure fresh pymc_core from GitHub
-    # --ignore-installed avoids failures on system-managed packages (e.g. PyYAML)
-    echo "Installing pymc_repeater with fresh dependencies from pyproject.toml..."
-    if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall --ignore-installed .[hardware]; then
+    # Install into the venv (clean, no system-packages flags needed)
+    echo "Installing pymc_repeater into venv ($VENV_DIR)..."
+    if "$VENV_PIP" install --upgrade --no-cache-dir .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
 
@@ -601,12 +679,12 @@ upgrade_repeater() {
         echo "[3/9] Updating system dependencies..."
         apt-get update -qq
 
-        apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-rrdtool wget swig build-essential python3-dev
+        apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
         # Install polkit (package name varies by distro version)
         apt-get install -y policykit-1 2>/dev/null \
             || apt-get install -y polkitd pkexec 2>/dev/null \
             || echo "    Warning: Could not install polkit (sudo fallback will be used)"
-        pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+        pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || python3 -m pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
 
         # Install mikefarah yq v4 if not already installed
         if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
@@ -654,7 +732,10 @@ upgrade_repeater() {
         echo "    ✓ User groups updated"
 
         echo "[6/9] Fixing permissions..."
-        chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater 2>/dev/null || true
+        # Venv stays root-owned (pip runs as root); service user only needs read+execute
+        chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater 2>/dev/null || true
+        chown root:root "$INSTALL_DIR" 2>/dev/null || true
+        chmod 755 "$INSTALL_DIR" 2>/dev/null || true
         chmod 750 "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
         chmod 755 /var/lib/pymc_repeater 2>/dev/null || true
         # Pre-create the .config directory that the service will need
@@ -687,35 +768,46 @@ EOF
 set -e
 CHANNEL="${1:-main}"
 PRETEND_VERSION="${2:-}"
+VENV_DIR="/opt/pymc_repeater/venv"
+VENV_PIP="$VENV_DIR/bin/pip"
+VENV_PYTHON="$VENV_DIR/bin/python"
 # Validate: only allow safe git ref characters
 if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
     echo "Invalid channel name: $CHANNEL" >&2
     exit 1
 fi
-export PIP_ROOT_USER_ACTION=ignore
 # If caller supplied a version string, tell setuptools_scm to use it (sudo
 # strips env vars so it is passed as a positional argument instead).
 [ -n "$PRETEND_VERSION" ] && export SETUPTOOLS_SCM_PRETEND_VERSION="$PRETEND_VERSION"
-# Migration: remove legacy PYTHONPATH from service unit if present.
-# Old installs set PYTHONPATH=/opt/pymc_repeater which caused the service to
-# load from a stale source copy instead of the pip-installed dist-packages.
+# ---- Migration: ensure venv exists (handles upgrades from system-pip era) ----
+if [ ! -x "$VENV_PYTHON" ]; then
+    echo "[pymc-do-upgrade] Creating venv at $VENV_DIR ..."
+    python3 -m venv --system-site-packages "$VENV_DIR"
+    "$VENV_PIP" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+fi
+# ---- Migration: clean up legacy service unit issues ----
 SVC_UNIT=/etc/systemd/system/pymc-repeater.service
 if grep -q 'PYTHONPATH' "$SVC_UNIT" 2>/dev/null; then
     sed -i '/^Environment=.*PYTHONPATH/d' "$SVC_UNIT"
     systemctl daemon-reload
 fi
-# Migration: fix WorkingDirectory if it still points at the old source checkout.
-# /opt/pymc_repeater contains a repeater/ subdirectory which shadows the
-# pip-installed package, causing updates to have no effect on the running process.
 if grep -q 'WorkingDirectory=/opt/pymc_repeater' "$SVC_UNIT" 2>/dev/null; then
     sed -i 's|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|' "$SVC_UNIT"
     systemctl daemon-reload
 fi
-exec python3 -m pip install \
-    --break-system-packages \
+if grep -q 'ExecStart=/usr/bin/python3' "$SVC_UNIT" 2>/dev/null; then
+    sed -i "s|ExecStart=/usr/bin/python3|ExecStart=$VENV_PYTHON|" "$SVC_UNIT"
+    systemctl daemon-reload
+fi
+# ---- Remove stale source trees that shadow the venv package ----
+[ -d /opt/pymc_repeater/repeater ] && rm -rf /opt/pymc_repeater/repeater
+# ---- Remove old system-level packages to avoid confusion ----
+python3 -m pip uninstall -y pymc_repeater 2>/dev/null || true
+python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+# ---- Install into the venv ----
+exec "$VENV_PIP" install \
+    --upgrade \
     --no-cache-dir \
-    --force-reinstall \
-    --ignore-installed \
     "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
 UPGRADEEOF
         chmod 0755 /usr/local/bin/pymc-do-upgrade
@@ -735,9 +827,6 @@ UPGRADEEOF
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
 
-        # Suppress pip root user warnings
-        export PIP_ROOT_USER_ACTION=ignore
-
         # Calculate version from git for setuptools_scm
         if [ -d .git ]; then
             git fetch --tags 2>/dev/null || true
@@ -753,13 +842,12 @@ UPGRADEEOF
         echo "Note: Using optimized binary wheels for faster installation"
         echo ""
 
-        # Remove old pymc_core first so no stale .py/.pyc files linger
-        python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+        # Migrate from system pip to venv (idempotent)
+        migrate_to_venv
 
-        # Install with --force-reinstall to ensure fresh pymc_core from GitHub
-        # --ignore-installed avoids failures on system-managed packages (e.g. PyYAML)
-        echo "Upgrading pymc_repeater with fresh dependencies from pyproject.toml..."
-        if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall --ignore-installed .[hardware]; then
+        # Install into the venv (clean, no system-packages flags needed)
+        echo "Upgrading pymc_repeater into venv ($VENV_DIR)..."
+        if "$VENV_PIP" install --upgrade --no-cache-dir .[hardware]; then
             echo ""
             echo "✓ Package and dependencies upgraded successfully!"
         else
