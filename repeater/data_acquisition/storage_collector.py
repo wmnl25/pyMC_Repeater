@@ -32,7 +32,7 @@ class StorageCollector:
 
         # Initialize MQTT handler if configured
         self.mqtt_handler = None
-        if config.get("mqtt", {}) and local_identity:
+        if (config.get("mqtt_brokers", {}) or config.get("letsmesh", {}) or config.get("mqtt", {})) and local_identity:
             try:
                 # Pass local_identity directly (supports both standard and firmware keys)
                 self.mqtt_handler = MeshCoreToMqttPusher(
@@ -159,9 +159,9 @@ class StorageCollector:
         #         f"Skipping mqtt publish for packet with drop_reason: {packet_record.get('drop_reason')}"
         #     )
         # else:
-        self._publish_to_mqtt(packet_record)
+        self._publish_packet_to_mqtt(packet_record)
 
-    def _publish_to_mqtt(self, packet_record: dict):
+    def _publish_packet_to_mqtt(self, packet_record: dict):
         """Publish packet to mqtt broker if enabled and allowed"""
         if not self.mqtt_handler:
             return
@@ -171,10 +171,6 @@ class StorageCollector:
             if packet_type is None:
                 logger.error("Cannot publish to mqtt: packet_record missing 'type' field")
                 return
-
-            # if packet_type in self.disallowed_packet_types:
-            #     logger.debug(f"Skipped publishing packet type 0x{packet_type:02X} (disallowed)")
-            #     return
 
             node_name = self.config.get("repeater", {}).get("node_name", "Unknown")
             packet = PacketRecord.from_packet_record(
@@ -192,12 +188,12 @@ class StorageCollector:
 
     def record_advert(self, advert_record: dict):
         self.sqlite_handler.store_advert(advert_record)
-        #self.old_mqtt_handler.publish(advert_record, "advert")
+        self.mqtt_handler.publish_mqtt("advert", advert_record)
 
     def record_noise_floor(self, noise_floor_dbm: float):
         noise_record = {"timestamp": time.time(), "noise_floor_dbm": noise_floor_dbm}
         self.sqlite_handler.store_noise_floor(noise_record)
-        #self.old_mqtt_handler.publish(noise_record, "noise_floor")
+        self.mqtt_handler.publish_mqtt("noise_floor", noise_record)
 
     def record_crc_errors(self, count: int):
         """Record a batch of CRC errors detected since last poll."""

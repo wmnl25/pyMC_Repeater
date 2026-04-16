@@ -17,7 +17,7 @@ except Exception:
     from datetime import timezone
     UTC = timezone.utc
 
-from repeater import __version__
+from repeater import __version__, config
 
 # Try to import paho-mqtt error code mappings
 try:
@@ -36,6 +36,23 @@ logger = logging.getLogger("MQTTHandler")
 def b64url(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
 
+LETSMESH_BROKERS = [
+    {
+        "name": "Europe (LetsMesh v1)",
+        "host": "mqtt-eu-v1.letsmesh.net",
+        "port": 443,
+        "audience": "mqtt-eu-v1.letsmesh.net",
+        "use_jwt_auth": True,
+    },
+    {
+        "name": "US West (LetsMesh v1)",
+        "host": "mqtt-us-v1.letsmesh.net",
+        "port": 443,
+        "audience": "mqtt-us-v1.letsmesh.net",
+        "use_jwt_auth": True,
+    },
+]
+
 
 # ====================================================================
 # Single Broker Connection Manager
@@ -53,10 +70,10 @@ class _BrokerConnection:
         public_key: str,
         iata_code: str,
         jwt_expiry_minutes: int,
-        use_tls: bool,
         email: str,
         owner: str,
         broker_index: int,
+        node_name: str,
         on_connect_callback: Optional[Callable] = None,
         on_disconnect_callback: Optional[Callable] = None
     ):
@@ -65,27 +82,46 @@ class _BrokerConnection:
         self.public_key = public_key.upper()
         self.iata_code = iata_code
         self.jwt_expiry_minutes = jwt_expiry_minutes
-        self.use_tls = use_tls
         self.email = email
         self.owner = owner
+        self.node_name = node_name
         self.broker_index = broker_index
         self._on_connect_callback = on_connect_callback
         self._on_disconnect_callback = on_disconnect_callback
         self._connect_time = None
-        self._tls_verified = False
         self._running = False
         self._reconnect_attempts = 0
         self._reconnect_timer = None
         self._max_reconnect_delay = 300  # 5 minutes max
         self._jwt_refresh_timer = None
         self.transport = broker.get('transport', 'websockets')
-        client_id = f"meshcore_{self.public_key}_{broker['host']}"
-        self.client = mqtt.Client(client_id=client_id, transport=self.transport)
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
+        
         self.use_jwt_auth = broker.get('use_jwt_auth', False)
         self.username = broker.get('username', None)
         self.password = broker.get('password', None)
+
+        self.format=broker.get("format", "letsmesh") 
+        self.tls=broker.get("tls", None) 
+        
+        client_id = f"meshcore_{self.public_key}_{broker['host']}_{self.format}"
+        self.client = mqtt.Client(client_id=client_id, transport=self.transport)
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+
+        # If None, will be use defaults depending on the format value
+        self.base_topic=broker.get("base_topic", None)
+
+        self.enabled = broker.get("enabled", False)
+        self.retain_status = broker.get("retain_status", False)
+
+        if self.base_topic is None:
+            if self.format == "mqtt":
+                self.base_topic = f"meshcore/repeater/{self.node_name}"
+            elif self.format == "letsmesh":
+                self.base_topic = f"meshcore/{self.iata_code}/{self.public_key}"
+            else:
+                logger.warning(f"Unknown broker format '{self.format}' for {self.broker['name']}, using default base topic")
+                self.base_topic = f"meshcore/{self.iata_code}/{self.public_key}"
         
         from pymc_core.protocol.utils import PAYLOAD_TYPES
         
@@ -280,15 +316,28 @@ class _BrokerConnection:
         self.client.disconnect()
         logger.info(f"Disconnected from {self.broker['name']}")
 
-    def publish(self, topic: str, payload: str, retain: bool = False, qos: int = 0):
+    def publish(self, subtopic: str, payload: str, retain: bool = False, qos: int = 0):
         """Publish message to broker"""
-        logger.debug(f"Publishing to topic '{topic}' with payload: {payload}: self._running={self._running}")
+        
+        # Legacy MQTT config uses singular "packet" topic, while LetsMesh uses "packets". Handle this for compatibility.
+        if self.format == "mqtt" and subtopic == "packets":
+            subtopic = "packet"
+        
+        if(subtopic == "status"): # Override the status topic retain and qos settings based on broker configuration
+            retain = self.retain_status
+            qos = 1 if self.retain_status else 0
+
+        logger.debug(f"Publishing to topic '{self.base_topic}/{subtopic}' with payload: [{payload}]. Running={self._running}. Retain={retain}, QoS={qos}")
         if self._running:
-            result = self.client.publish(topic, payload, retain=retain, qos=qos)
+            result = self.client.publish(f"{self.base_topic}/{subtopic}", payload, retain=retain, qos=qos)
             return result
         else:
             logger.warning(f"Cannot publish to {self.broker['name']} - not connected")
         return None
+
+    def is_enabled(self) -> bool:
+        """Check if connection is enabled"""
+        return self.enabled
 
     def is_connected(self) -> bool:
         """Check if connection is active"""
@@ -344,7 +393,7 @@ class _BrokerConnection:
 
 
 # ====================================================================
-# MeshCore → MQTT Publisher with Ed25519 auth token
+# MeshCore → MQTT Publisher
 # ====================================================================
 class MeshCoreToMqttPusher:
 
@@ -365,50 +414,53 @@ class MeshCoreToMqttPusher:
 
         node_info = get_node_info(config)
 
-        iata_code = node_info["iata_code"]
+        self.iata_code = node_info["iata_code"]
         self.email = node_info.get("email", "")
         self.owner = node_info.get("owner", "")
-        status_interval = node_info["status_interval"]
-        node_name = node_info["node_name"]
-        radio_config = node_info["radio_config"]
-
-        # Get additional brokers from config (optional)
-        mqtt_config = config.get("mqtt", {})
-        brokers = mqtt_config.get("brokers", [])
-
-        # Add additional brokers from config
-        self.brokers = []
-        if brokers:
-            for broker_config in brokers:
-                if all(k in broker_config for k in ["name", "host", "port", "enabled"]):
-                    if broker_config["enabled"]:
-                        self.brokers.append(broker_config)
-                        logger.info(f"Added broker: {broker_config['name']}")
-                    else:
-                        logger.info(f"Broker disabled in config, skipping: {broker_config['name']}")
-                else:
-                    logger.warning(f"Skipping invalid broker config: {broker_config}")
-
-        # Validate that we have at least one broker
-        # if not self.brokers:
-        #     raise ValueError(
-        #         "No brokers configured. Either set broker_index to a valid value "
-        #         "or provide additional_brokers in config."
-        #     )
-
+        self.status_interval = node_info["status_interval"]
+        self.node_name = node_info["node_name"]
         self.local_identity = local_identity
         self.public_key = public_key
-        self.iata_code = iata_code
         self.jwt_expiry_minutes = jwt_expiry_minutes
-        self.use_tls = use_tls
-        self.status_interval = status_interval
         self.app_version = __version__
-        self.node_name = node_name
-        self.radio_config = radio_config
+        self.radio_config = node_info["radio_config"]
         self.stats_provider = stats_provider
         self._status_task = None
         self._running = False
         self._lock = threading.Lock()
+
+        # Initialize brokers list        
+        mqtt_brokers_config = config.get("mqtt_brokers", {})
+        letsmesh_config = config.get("letsmesh", {})
+        mqtt_config = config.get("mqtt", {})
+
+        brokers = []
+        if mqtt_brokers_config:
+            # Pull in brokers from mqtt_brokers config
+            brokers.extend(mqtt_brokers_config.get("brokers", []))
+
+            if letsmesh_config or mqtt_config:
+                logger.warning("Multiple MQTT broker configurations found (mqtt_brokers, letsmesh, mqtt). Only mqtt_brokers will be used")
+
+        else:
+            if mqtt_config:
+                imported_mqtt_config = self.convert_mqtt_to_broker_config(mqtt_config)
+                brokers.append(imported_mqtt_config)
+
+            if letsmesh_config:
+                imported_letsmesh_configs = self.convert_letsmesh_to_broker_config(letsmesh_config)
+                brokers.extend(imported_letsmesh_configs)
+
+        self.brokers = []
+        if brokers:
+            for broker_config in brokers:
+                if all(k in broker_config for k in ["name", "host", "port", "enabled"]):
+                    self.brokers.append(broker_config)
+                    logger.info(f"Added broker: {broker_config['name']}")
+                else:
+                    logger.warning(f"Skipping invalid broker config: {broker_config}")
+
+
 
         # Create broker connections
         self.connections: List[_BrokerConnection] = []
@@ -419,16 +471,110 @@ class MeshCoreToMqttPusher:
                 public_key=self.public_key,
                 iata_code=self.iata_code,
                 jwt_expiry_minutes=self.jwt_expiry_minutes,
-                use_tls=self.use_tls,
                 email=self.email,
                 owner=self.owner,
                 broker_index=idx,
+                node_name=self.node_name,
                 on_connect_callback=self._on_broker_connected,
                 on_disconnect_callback=self._on_broker_disconnected,
             )
             self.connections.append(conn)
 
         logger.info(f"Initialized with {len(self.connections)} broker connection(s)")
+
+        # Convert legacy configration to new one
+        if not mqtt_brokers_config:
+            logger.info("Storing mqtt_brokers config from legacy mqtt/letsmesh configuration")
+            mqtt_brokers_config = {
+                "iata_code": self.iata_code,
+                "status_interval": self.status_interval,
+                "owner": self.owner,
+                "email": self.email,
+                "brokers": brokers
+            }
+
+            # Update the configuration with the new configuration
+            config["mqtt_brokers"] = mqtt_brokers_config
+
+    def convert_mqtt_to_broker_config(self, mqtt_cfg: dict) -> dict:
+        """Convert legacy MQTT config format to internal broker config format"""
+        logger.info(f"Imported MQTT broker from 'mqtt' config: {mqtt_cfg['broker']}")
+        transport = "websockets" if mqtt_cfg.get("use_websockets", False) else "tcp"
+        return {
+            "enabled": mqtt_cfg.get("enabled", False),
+            "name": mqtt_cfg["broker"],
+            "host": mqtt_cfg["broker"],
+            "port": mqtt_cfg["port"],
+            "use_jwt_auth": False, # The legacy MQTT config does not support JWT auth, so we set this to False
+            "username": mqtt_cfg.get("username", None),
+            "password": mqtt_cfg.get("password", None),
+            "transport": transport,
+            "tls": mqtt_cfg.get("tls", None),
+            "format": "mqtt",
+            "base_topic": mqtt_cfg.get("base_topic", None),
+        }
+
+    def convert_letsmesh_to_broker_config(self, letsmesh_cfg: dict) -> List[dict]:
+        """Convert LetsMesh config format to internal broker config format"""
+        
+        brokers = []
+        
+        enabled = letsmesh_cfg.get("enabled", False)
+
+        idx = letsmesh_cfg.get("broker_index", None)
+        if idx == 0 or idx == 1:
+            broker_info = LETSMESH_BROKERS[idx]
+            logger.info(f"Imported LetsMesh broker from 'letsmesh' config: {broker_info['name']}")
+            brokers.append({
+                "enabled": enabled,
+                "name": broker_info["name"],
+                "host": broker_info["host"],
+                "port": broker_info["port"],
+                "audience": broker_info["audience"],
+                "use_jwt_auth": True,
+                "transport": "websockets",
+                "tls": None,
+                "format": "letsmesh",
+                "base_topic": None,
+                "retain_status": False
+            })
+        elif idx < 0:
+            if idx == -1:
+                brokers.extend({
+                    "enabled": enabled,
+                    "name": broker_info["name"],
+                    "host": broker_info["host"],
+                    "port": broker_info["port"],
+                    "audience": broker_info["audience"],
+                    "use_jwt_auth": True,
+                    "transport": "websockets",
+                    "tls": None,
+                    "format": "letsmesh",
+                    "base_topic": None,
+                    "retain_status": False
+                } for broker_info in LETSMESH_BROKERS)
+
+            additional = letsmesh_cfg.get("additional_brokers", [])
+            for add_broker in additional:
+                logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
+                brokers.append({
+                    "enabled": enabled,
+                    "name": add_broker["name"],
+                    "host": add_broker["host"],
+                    "port": add_broker["port"],
+                    "audience": add_broker["audience"],
+                    "use_jwt_auth": True,
+                    "transport": "websockets",
+                    "use_jwt_auth": add_broker.get("use_jwt_auth", True),
+                    "transport": add_broker.get("transport", "websockets"),
+                    "tls": None,
+                    "format": "letsmesh",
+                    "base_topic": None,
+                    "retain_status": False
+                })
+
+
+        return brokers  # Placeholder for now - we will implement this if we need to support the old letsmesh config format
 
     def _on_broker_connected(self, broker_name: str):
         """Callback when a broker connects"""
@@ -523,9 +669,6 @@ class MeshCoreToMqttPusher:
     def _process_packet(self, pkt: dict) -> dict:
         return {"timestamp": datetime.now(UTC).isoformat(), "origin_id": self.public_key, **pkt}
 
-    def _topic(self, subtopic: str) -> str:
-        return f"meshcore/{self.iata_code}/{self.public_key}/{subtopic}"
-
     def publish_packet(self, pkt: dict, subtopic="packets", retain=False):
         return self.publish(subtopic, self._process_packet(pkt), retain)
 
@@ -576,26 +719,50 @@ class MeshCoreToMqttPusher:
 
     def publish(self, subtopic: str, payload: dict, retain: bool = False, qos: int = 0):
         """Publish message to all connected brokers"""
-        topic = self._topic(subtopic)
         message = json.dumps(payload)
 
-        logger.debug(f"Publishing to topic '{topic}' with payload: {message}")
+        # _BrokerConnection now handles topic prefixing, so we only log the subtopic here
+        logger.debug(f"Publishing to topic '{subtopic}' with payload: {message}")
 
         packet_type = payload.get("type")
 
         results = []
         with self._lock:
             for conn in self.connections:
-                if conn.is_connected():
+                if conn.enabled and conn.is_connected():
                     if packet_type in conn.disallowed_types:
                         logger.debug(f"Skipped publishing packet type 0x{packet_type:02X} (disallowed)")
-                        return
-                    result = conn.publish(topic, message, retain=retain, qos=qos)
+                        continue
+                    result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
-                    logger.debug(f"Published to {conn.broker['name']}/{topic}")
+                    logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
 
         if not results:
-            logger.warning(f"No active broker connections for publishing to {topic}")
+            logger.warning(f"No active broker connections for publishing to {subtopic}")
+
+        return results
+    
+
+    def publish_mqtt(self, subtopic: str, payload: dict, retain: bool = False, qos: int = 0):
+        """Publish message to all connected brokers"""
+        message = json.dumps(payload)
+
+        # _BrokerConnection now handles topic prefixing, so we only log the subtopic here
+        logger.debug(f"Publishing to topic '{subtopic}' with payload: {message}")
+
+        results = []
+        with self._lock:
+            for conn in self.connections:
+                if conn.enabled and conn.is_connected():
+                    if conn.format != "mqtt":
+                        logger.debug(f"Skipped publishing to {conn.broker['name']} (wrong format)")
+                        continue
+                    result = conn.publish(subtopic, message, retain=retain, qos=qos)
+                    results.append((conn.broker["name"], result))
+                    logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+
+        if not results:
+            logger.warning(f"No active broker connections for publishing to {subtopic}")
 
         return results
 

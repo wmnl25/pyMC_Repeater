@@ -1003,8 +1003,7 @@ class APIEndpoints:
         """Get MQTT connection status and configuration."""
         self._set_cors_headers()
         try:
-            mqtt_cfg = self.config.get("mqtt", {})
-            enabled = mqtt_cfg.get("enabled", False)
+            # mqtt_cfg = self.config.get("mqtt_brokers", {})
 
             # Walk the chain to the mqtt_handler
             handler = None
@@ -1018,14 +1017,17 @@ class APIEndpoints:
             if handler:
                 for conn in getattr(handler, "connections", []):
                     connected_brokers.append({
+                        "enabled": conn.enabled,
                         "name": conn.broker.get("name", ""),
                         "host": conn.broker.get("host", ""),
-                        "connected": conn.is_connected(),
-                        "reconnecting": conn.has_pending_reconnect(),
+                        "status": {
+                            "connected": conn.is_connected(),
+                            "reconnecting": conn.has_pending_reconnect(),
+                        },
+                        "format": conn.format
                     })
 
             return self._success({
-                "enabled": enabled,
                 "handler_active": handler is not None,
                 "brokers": connected_brokers,
             })
@@ -1033,95 +1035,111 @@ class APIEndpoints:
             logger.error(f"Error getting MQTT status: {e}")
             return self._error(str(e))
 
-    # @cherrypy.expose
-    # @cherrypy.tools.json_out()
-    # @cherrypy.tools.json_in()
-    # def update_mqtt_config(self):
-    #     """Update MQTT Observer configuration.
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def update_mqtt_config(self):
+        """Update MQTT Observer configuration.
 
-    #     POST /api/update_mqtt_config
-    #     Body: {
-    #         "iata_code": "SFO",
-    #         "status_interval": 300,
-    #         "owner": "Callsign",
-    #         "email": "user@example.com",
-    #         "disallowed_packet_types": ["ACK"]
-    #     }
-    #     """
-    #     self._set_cors_headers()
+        POST /api/update_mqtt_config
+        Body: {
+            "iata_code": "SFO",
+            "status_interval": 300,
+            "owner": "Callsign",
+            "email": "user@example.com",
+            "brokers": [
+            {
+            
+            }]
+        }
+        """
+        self._set_cors_headers()
 
-    #     if cherrypy.request.method == "OPTIONS":
-    #         return ""
+        if cherrypy.request.method == "OPTIONS":
+            return ""
 
-    #     try:
-    #         self._require_post()
-    #         data = cherrypy.request.json or {}
+        try:
+            self._require_post()
+            data = cherrypy.request.json or {}
 
-    #         if not data:
-    #             return self._error("No configuration updates provided")
+            if not data:
+                return self._error("No configuration updates provided")
 
-    #         letsmesh_updates = {}
+            mqtt_updates = {}
 
-    #         if "enabled" in data:
-    #             letsmesh_updates["enabled"] = bool(data["enabled"])
-    #         if "iata_code" in data:
-    #             letsmesh_updates["iata_code"] = str(data["iata_code"]).strip()
-    #         if "broker_index" in data:
-    #             letsmesh_updates["broker_index"] = int(data["broker_index"])
-    #         if "status_interval" in data:
-    #             letsmesh_updates["status_interval"] = max(60, int(data["status_interval"]))
-    #         if "owner" in data:
-    #             letsmesh_updates["owner"] = str(data["owner"]).strip()
-    #         if "email" in data:
-    #             letsmesh_updates["email"] = str(data["email"]).strip()
-    #         if "disallowed_packet_types" in data:
-    #             letsmesh_updates["disallowed_packet_types"] = list(data["disallowed_packet_types"])
-    #         if "additional_brokers" in data:
-    #             brokers = data["additional_brokers"]
-    #             if not isinstance(brokers, list):
-    #                 return self._error("additional_brokers must be a list")
-    #             validated = []
-    #             for i, b in enumerate(brokers):
-    #                 if not isinstance(b, dict):
-    #                     return self._error(f"Broker at index {i} must be an object")
-    #                 for field in ("name", "host", "audience"):
-    #                     if not b.get(field, "").strip():
-    #                         return self._error(f"Broker at index {i} missing required field: {field}")
-    #                 try:
-    #                     port = int(b.get("port", 443))
-    #                 except (ValueError, TypeError):
-    #                     return self._error(f"Broker at index {i} has invalid port")
-    #                 validated.append({
-    #                     "name":     str(b["name"]).strip(),
-    #                     "host":     str(b["host"]).strip(),
-    #                     "port":     port,
-    #                     "audience": str(b["audience"]).strip(),
-    #                 })
-    #             letsmesh_updates["additional_brokers"] = validated
+            if "iata_code" in data:
+                mqtt_updates["iata_code"] = str(data["iata_code"]).strip()
+            if "status_interval" in data:
+                mqtt_updates["status_interval"] = max(60, int(data["status_interval"]))
+            if "owner" in data:
+                mqtt_updates["owner"] = str(data["owner"]).strip()
+            if "email" in data:
+                mqtt_updates["email"] = str(data["email"]).strip()
+            # if "disallowed_packet_types" in data:
+            #     mqtt_updates["disallowed_packet_types"] = list(data["disallowed_packet_types"])
+            if "brokers" in data:
+                brokers = data["brokers"]
+                if not isinstance(brokers, list):
+                    return self._error("brokers must be a list")
+                validated = []
+                for i, b in enumerate(brokers):
+                    if not isinstance(b, dict):
+                        return self._error(f"Broker at index {i} must be an object")
+                    for field in ("name", "host", "port", "format"):
+                        if not b.get(field, ""):
+                            return self._error(f"Broker at index {i} missing required field: {field}")
+                    
+                    try:
+                        port = int(b.get("port", 443))
+                    except (ValueError, TypeError):
+                        return self._error(f"Broker at index {i} has invalid port")
+                    
+                    new_broker = {
+                        "enabled":   b.get("enabled", False),
+                        "name":      str(b["name"]).strip(),
+                        "transport": str(b.get("transport", "websockets")).strip(),
+                        "host":      str(b["host"]).strip(),
+                        "port":      port,
+                        "format":    str(b["format"]).strip(),
+                        "disallowed_packet_types": list(b.get("disallowed_packet_types", [])),
+                        "retain_status": bool(b.get("retain_status", False)),
+                    }
+                    
+                    if b.get("use_jwt_auth", False):
+                        new_broker["use_jwt_auth"] = True
+                        new_broker["audience"] = str(b["audience"]).strip()
+                    else:
+                        new_broker["use_jwt_auth"] = False
+                        new_broker["username"] = b.get("username", None)
+                        new_broker["password"] = b.get("password", None)
 
-    #         if not letsmesh_updates:
-    #             return self._error("No valid settings provided")
+                    validated.append(new_broker)
 
-    #         result = self.config_manager.update_and_save(
-    #             updates={"letsmesh": letsmesh_updates},
-    #             live_update=False,  # Restart required for LetsMesh handler changes
-    #         )
+                mqtt_updates["brokers"] = validated
 
-    #         if result.get("success"):
-    #             logger.info(f"LetsMesh config updated: {list(letsmesh_updates.keys())}")
-    #             return self._success({
-    #                 "persisted": result.get("saved", False),
-    #                 "restart_required": True,
-    #                 "message": "Observer settings saved. Restart the service for changes to take effect.",
-    #             })
-    #         else:
-    #             return self._error(result.get("error", "Failed to update LetsMesh configuration"))
+            if not mqtt_updates:
+                return self._error("No valid settings provided")
 
-    #     except cherrypy.HTTPError:
-    #         raise
-    #     except Exception as e:
-    #         logger.error(f"Error updating LetsMesh config: {e}")
-    #         return self._error(str(e))
+            result = self.config_manager.update_and_save(
+                updates={"mqtt_brokers": mqtt_updates, "mqtt": None, "letsmesh": None},
+                live_update=False,  # Restart required for MQTT handler changes
+            )
+
+            if result.get("success"):
+                logger.info(f"MQTT config updated: {list(mqtt_updates.keys())}")
+                return self._success({
+                    "persisted": result.get("saved", False),
+                    "restart_required": True,
+                    "message": "Observer settings saved. Restart the service for changes to take effect.",
+                })
+            else:
+                return self._error(result.get("error", "Failed to update LetsMesh configuration"))
+
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating LetsMesh config: {e}")
+            return self._error(str(e))
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

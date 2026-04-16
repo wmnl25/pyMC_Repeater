@@ -30,7 +30,8 @@ def get_node_info(config: Dict[str, Any]) -> Dict[str, Any]:
     radio_bw_khz = radio_bw / 1_000
     radio_config_str = f"{radio_freq_mhz},{radio_bw_khz},{radio_sf},{radio_cr}"
     
-    mqtt_config = config.get("mqtt", {})
+    # Handle getting the config from mqtt brokers, falling back to letsmesh if it doesn't exist
+    mqtt_config = config.get("mqtt_brokers", config.get("letsmesh", {}))
     
     return {
         "node_name": node_name,
