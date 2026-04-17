@@ -1588,6 +1588,122 @@ class SQLiteHandler:
             logger.error(f"Failed to delete transport key: {e}")
             return False
 
+    def sync_transport_keys(self, entries: List[Dict[str, Any]]) -> Dict[str, int]:
+        """
+        Replace transport key tree from a canonical Glass payload.
+
+        Args:
+            entries: Flat list of nodes with fields:
+                - node_id: unique stable id in payload
+                - name: key/group display name
+                - flood_policy: 'allow' | 'deny'
+                - transport_key: optional explicit key material
+                - parent_node_id: optional parent node reference
+
+        Returns:
+            Dict containing applied node count and generated key count.
+        """
+        if not isinstance(entries, list):
+            raise ValueError("transport_keys payload must be a list")
+
+        normalized: Dict[str, Dict[str, Any]] = {}
+        used_names: set[str] = set()
+        for raw in entries:
+            if not isinstance(raw, dict):
+                raise ValueError("Each transport key entry must be an object")
+            node_id = str(raw.get("node_id", "")).strip()
+            name = str(raw.get("name", "")).strip()
+            flood_policy = str(raw.get("flood_policy", "")).strip().lower()
+            parent_node_id = raw.get("parent_node_id")
+            transport_key = raw.get("transport_key")
+            if not node_id:
+                raise ValueError("transport key entry is missing node_id")
+            if node_id in normalized:
+                raise ValueError(f"Duplicate node_id in payload: {node_id}")
+            if not name:
+                raise ValueError(f"transport key entry '{node_id}' is missing name")
+            if name in used_names:
+                raise ValueError(f"Duplicate transport key name in payload: {name}")
+            if flood_policy not in {"allow", "deny"}:
+                raise ValueError(f"Invalid flood_policy for '{name}': {flood_policy}")
+            if transport_key is not None and not isinstance(transport_key, str):
+                raise ValueError(f"transport_key for '{name}' must be a string or null")
+            normalized[node_id] = {
+                "node_id": node_id,
+                "name": name,
+                "flood_policy": flood_policy,
+                "parent_node_id": str(parent_node_id).strip() if parent_node_id else None,
+                "transport_key": transport_key.strip() if isinstance(transport_key, str) else None,
+            }
+            used_names.add(name)
+
+        for node in normalized.values():
+            parent_node_id = node.get("parent_node_id")
+            if parent_node_id and parent_node_id not in normalized:
+                raise ValueError(
+                    f"Parent node '{parent_node_id}' does not exist for '{node['node_id']}'"
+                )
+
+        ordered: List[Dict[str, Any]] = []
+        pending = dict(normalized)
+        resolved_ids: set[str] = set()
+        while pending:
+            progressed = False
+            for node_id, node in list(pending.items()):
+                parent_node_id = node.get("parent_node_id")
+                if parent_node_id and parent_node_id not in resolved_ids:
+                    continue
+                ordered.append(node)
+                resolved_ids.add(node_id)
+                pending.pop(node_id)
+                progressed = True
+            if not progressed:
+                raise ValueError("Cycle detected in transport key tree payload")
+
+        generated_keys = 0
+        now = time.time()
+        with sqlite3.connect(self.sqlite_path) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("DELETE FROM transport_keys")
+            db_ids: Dict[str, int] = {}
+            for node in ordered:
+                transport_key = node.get("transport_key")
+                if not transport_key:
+                    transport_key = self.generate_transport_key(node["name"])
+                    generated_keys += 1
+                parent_id = (
+                    db_ids.get(node["parent_node_id"])
+                    if node.get("parent_node_id")
+                    else None
+                )
+                cursor = conn.execute(
+                    """
+                    INSERT INTO transport_keys (
+                        name,
+                        flood_policy,
+                        transport_key,
+                        parent_id,
+                        last_used,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        node["name"],
+                        node["flood_policy"],
+                        transport_key,
+                        parent_id,
+                        None,
+                        now,
+                        now,
+                    ),
+                )
+                db_ids[node["node_id"]] = int(cursor.lastrowid)
+            conn.commit()
+
+        return {"applied_nodes": len(ordered), "generated_keys": generated_keys}
+
     def delete_advert(self, advert_id: int) -> bool:
         try:
             with sqlite3.connect(self.sqlite_path) as conn:

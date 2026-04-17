@@ -18,6 +18,7 @@ class StorageCollector:
     def __init__(self, config: dict, local_identity=None, repeater_handler=None):
         self.config = config
         self.repeater_handler = repeater_handler
+        self.glass_publish_callback = None
 
         storage_dir_cfg = (
             config.get("storage", {}).get("storage_dir")
@@ -147,6 +148,7 @@ class StorageCollector:
         cumulative_counts = self.sqlite_handler.get_cumulative_counts()
         self.rrd_handler.update_packet_metrics(packet_record, cumulative_counts)
         self.mqtt_handler.publish(packet_record, "packet")
+        self._publish_to_glass(packet_record, "packet")
 
         # Broadcast to WebSocket clients for real-time updates
         if self.websocket_available:
@@ -210,17 +212,20 @@ class StorageCollector:
     def record_advert(self, advert_record: dict):
         self.sqlite_handler.store_advert(advert_record)
         self.mqtt_handler.publish(advert_record, "advert")
+        self._publish_to_glass(advert_record, "advert")
 
     def record_noise_floor(self, noise_floor_dbm: float):
         noise_record = {"timestamp": time.time(), "noise_floor_dbm": noise_floor_dbm}
         self.sqlite_handler.store_noise_floor(noise_record)
         self.mqtt_handler.publish(noise_record, "noise_floor")
+        self._publish_to_glass(noise_record, "noise_floor")
 
     def record_crc_errors(self, count: int):
         """Record a batch of CRC errors detected since last poll."""
         crc_record = {"timestamp": time.time(), "count": count}
         self.sqlite_handler.store_crc_errors(crc_record)
         self.mqtt_handler.publish(crc_record, "crc_errors")
+        self._publish_to_glass(crc_record, "crc_errors")
 
     def get_crc_error_count(self, hours: int = 24) -> int:
         return self.sqlite_handler.get_crc_error_count(hours)
@@ -320,6 +325,17 @@ class StorageCollector:
                 logger.info("LetsMesh handler disconnected")
             except Exception as e:
                 logger.error(f"Error disconnecting LetsMesh handler: {e}")
+
+    def set_glass_publisher(self, publish_callback):
+        self.glass_publish_callback = publish_callback
+
+    def _publish_to_glass(self, record: dict, record_type: str):
+        if not self.glass_publish_callback:
+            return
+        try:
+            self.glass_publish_callback(record_type, record)
+        except Exception as e:
+            logger.debug(f"Failed to publish telemetry to Glass MQTT: {e}")
 
     def create_transport_key(
         self,

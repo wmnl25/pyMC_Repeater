@@ -189,6 +189,18 @@ The configuration file is created and configured during installation at:
 /etc/pymc_repeater/config.yaml
 ```
 
+### Optional pyMC_Glass integration
+The repeater now supports an additive `glass` config section for central control-plane integration.
+When enabled, it sends periodic `/inform` payloads to pyMC_Glass, receives queued commands, and reports command results on the next inform cycle.
+
+Minimal example:
+```yaml
+glass:
+  enabled: true
+  base_url: "http://localhost:8080"
+  inform_interval_seconds: 30
+```
+
 To reconfigure radio and hardware settings after installation, run:
 ```bash
 sudo bash setup-radio-config.sh /etc/pymc_repeater

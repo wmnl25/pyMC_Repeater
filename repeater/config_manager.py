@@ -69,7 +69,7 @@ class ConfigManager:
             
             # Default sections to update if not specified
             if sections is None:
-                sections = ['repeater', 'delays', 'radio', 'acl', 'identities']
+                sections = ['repeater', 'delays', 'radio', 'acl', 'identities', 'glass']
             
             # Update each section
             for section in sections:

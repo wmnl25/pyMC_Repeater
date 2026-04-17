@@ -77,6 +77,17 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if "mesh" not in config:
         config["mesh"] = {}
 
+    if "glass" not in config:
+        config["glass"] = {
+            "enabled": False,
+            "base_url": "http://localhost:8080",
+            "inform_interval_seconds": 30,
+            "request_timeout_seconds": 10,
+            "verify_tls": True,
+            "api_token": "",
+            "cert_store_dir": "/etc/pymc_repeater/glass",
+        }
+
     # Ensure repeater.security exists with defaults for upgrades from older configs
     if "repeater" not in config:
         config["repeater"] = {}
