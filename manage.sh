@@ -497,10 +497,10 @@ case "$MACHINE_ARCH" in
     *) ARCH_TAG=""; PLATFORM_TAG="" ;;
 esac
 if [ -n "$ARCH_TAG" ]; then
-    PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+    PY_TAG=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
     WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
     echo "[pymc-do-upgrade] Trying dependencies from R2 wheels..."
-    "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
+    "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/index.html" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
 fi
 # ---- Install pymc_repeater from git ----
 exec "$VENV_PIP" install \
@@ -559,11 +559,11 @@ UPGRADEEOF
             *) ARCH_TAG=""; PLATFORM_TAG="" ;;
         esac
         if [ -n "$ARCH_TAG" ]; then
-            PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+            PY_TAG=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
             WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
             echo "  Checking for R2 wheels (${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG})..."
             echo "  Trying install from R2 pre-built wheels..."
-            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
+            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/index.html" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
             if [ "$R2_SUCCESS" -eq 1 ]; then
                 echo "  ✓ R2 wheels installed"
             else
@@ -901,10 +901,10 @@ python3 -m pip uninstall -y pymc_core 2>/dev/null || true
             *) ARCH_TAG=""; PLATFORM_TAG="" ;;
         esac
         if [ -n "$ARCH_TAG" ]; then
-            PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+            PY_TAG=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
             WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
             echo "[pymc-do-upgrade] Trying dependencies from R2 wheels..."
-            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
+            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/index.html" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
         fi
         # ---- Install pymc_repeater from git ----
         exec "$VENV_PIP" install \
@@ -963,11 +963,11 @@ UPGRADEEOF
                 *) ARCH_TAG=""; PLATFORM_TAG="" ;;
             esac
             if [ -n "$ARCH_TAG" ]; then
-                PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+                PY_TAG=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
                 WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
                 echo "  Checking for R2 wheels (${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG})..."
                 echo "  Trying install from R2 pre-built wheels..."
-                "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
+                "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/index.html" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
                 if [ "$R2_SUCCESS" -eq 1 ]; then
                     echo "  ✓ R2 wheels installed"
                 else
