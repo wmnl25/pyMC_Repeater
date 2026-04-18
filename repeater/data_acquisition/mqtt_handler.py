@@ -109,7 +109,10 @@ class _BrokerConnection:
         self.password = broker.get('password', None)
 
         self.format=broker.get("format", "letsmesh") 
-        self.tls=broker.get("tls", None) 
+        self.tls=broker.get("tls", {
+            "enabled": False,
+            "insecure": False,
+        })
         
         client_id = f"meshcore_{self.public_key}_{broker['host']}_{self.format}"
         self.client = mqtt.Client(client_id=client_id, transport=self.transport)
@@ -543,7 +546,10 @@ class MeshCoreToMqttPusher:
                 "format": "letsmesh",
                 "base_topic": None,
                 "retain_status": False,
-                "tls": broker_info["tls"],
+                "tls": {
+                    "enabled": True,
+                    "insecure": False,
+                },
             })
         elif idx < 0:
             if idx == -1:
@@ -558,7 +564,10 @@ class MeshCoreToMqttPusher:
                     "format": "letsmesh",
                     "base_topic": None,
                     "retain_status": False,
-                    "tls": broker_info["tls"],
+                    "tls": {
+                        "enabled": True,
+                        "insecure": False,
+                    },
                 } for broker_info in LETSMESH_BROKERS)
 
             additional = letsmesh_cfg.get("additional_brokers", [])
