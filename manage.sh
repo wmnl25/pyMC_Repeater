@@ -259,8 +259,10 @@ install_repeater() {
         return
     fi
 
-    # Welcome screen
-    $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
+    # Welcome screen (Bypass if the script was passd with the "install" option, assume we want a silent install)
+    if [ $1 != "install" ]; then
+        $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
+    fi
 
     # SPI Check - Universal approach that works on all boards (skip for CH341 USB-SPI adapter)
     SPI_MISSING=0
@@ -396,9 +398,15 @@ install_repeater() {
     chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config
 
     # Configure polkit for passwordless service restart
-    echo ">>> Configuring polkit for service management..."
-    mkdir -p /etc/polkit-1/rules.d
-    cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
+
+    # Work out which version of polkit is installed
+
+    POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
+    if (( $(echo "$POLKIT_VERSION > 0.105"| bc -l) )); then
+        echo "Polkit 0.106 or greater detected, using rules file"
+        echo ">>> Configuring polkit for service management..."
+        mkdir -p /etc/polkit-1/rules.d
+        cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") == "pymc-repeater.service" &&
@@ -407,7 +415,20 @@ polkit.addRule(function(action, subject) {
     }
 });
 EOF
-    chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+    else
+        echo "Polkit 0.105 or less detected, using pkla file"
+        mkdir -p /etc/polkit-1/localauthority/50-local.d
+        cat > /etc/polkit-1/localauthority/50-local.d/10-pymc-repeater.pkla <<'EOF'
+[Allow repeater to restart pymc-repeater service]
+Identity=unix-user:repeater
+Action=org.freedesktop.systemd1.manage-units
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+EOF
+        chmod 0644 /etc/polkit-1/localauthority/50-local.d/10-pymc-repeater.pkla
+    fi
 
     # Also configure sudoers as fallback for service restart
     echo ">>> Configuring sudoers for service management..."
@@ -496,9 +517,11 @@ UPGRADEEOF
     else
         export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
     fi
-
-    # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
-    export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+    # We don't have any binary wheels available for these on a LuckFox, so we need to ignore them on that platform.
+    if ! grep -q "Luckfox Pico" /proc/device-tree/model 2>/dev/null; then
+        # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
+        export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+    fi
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
 
@@ -566,7 +589,9 @@ UPGRADEEOF
         fi
         echo "═══════════════════════════════════════════════════════════════"
         echo ""
-        read -p "Press Enter to return to main menu..." || true
+        if [ $1 != "install" ]; then #Headless install support
+            read -p "Press Enter to return to main menu..." || true
+        fi
     else
         show_error "Installation completed but service failed to start!\n\nCheck logs from the main menu for details."
     fi
@@ -732,18 +757,25 @@ upgrade_repeater() {
         echo "    ✓ User groups updated"
 
         echo "[6/9] Fixing permissions..."
+        
         # Venv stays root-owned (pip runs as root); service user only needs read+execute
         chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater 2>/dev/null || true
         chown root:root "$INSTALL_DIR" 2>/dev/null || true
         chmod 755 "$INSTALL_DIR" 2>/dev/null || true
         chmod 750 "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
         chmod 755 /var/lib/pymc_repeater 2>/dev/null || true
+        
         # Pre-create the .config directory that the service will need
         mkdir -p /var/lib/pymc_repeater/.config/pymc_repeater 2>/dev/null || true
         chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config 2>/dev/null || true
+        
         # Configure polkit for passwordless service restart
-        mkdir -p /etc/polkit-1/rules.d
-        cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
+        POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
+        if (( $(echo "$POLKIT_VERSION > 0.105"| bc -l) )); then
+            echo "Polkit 0.106 or greater detected, using rules file"
+            echo ">>> Configuring polkit for service management..."
+            mkdir -p /etc/polkit-1/rules.d
+            cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") == "pymc-repeater.service" &&
@@ -752,7 +784,20 @@ polkit.addRule(function(action, subject) {
     }
 });
 EOF
-        chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+            chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        else
+            echo "Polkit 0.105 or less detected, using pkla file"
+            mkdir -p /etc/polkit-1/localauthority/50-local.d
+            cat > /etc/polkit-1/localauthority/50-local.d/10-pymc-repeater.pkla <<'EOF'
+[Allow repeater to restart pymc-repeater service]
+Identity=unix-user:repeater
+Action=org.freedesktop.systemd1.manage-units
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+EOF
+            chmod 0644 /etc/polkit-1/localauthority/50-local.d/10-pymc-repeater.pkla
+        fi
         # Also configure sudoers as fallback for service restart
         mkdir -p /etc/sudoers.d
         cat > /etc/sudoers.d/pymc-repeater <<'EOF'
@@ -837,8 +882,11 @@ UPGRADEEOF
             export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
         fi
 
-        # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
-        export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+    # We don't have any binary wheels available for these on a LuckFox, so we need to ignore them on that platform.
+        if ! grep -q "Luckfox Pico" /proc/device-tree/model 2>/dev/null; then
+            # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
+            export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+        fi
         echo "Note: Using optimized binary wheels for faster installation"
         echo ""
 
@@ -966,7 +1014,8 @@ uninstall_repeater() {
         systemctl daemon-reload
 
         echo "50"; echo "# Removing polkit and sudoers rules..."
-        rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules || true
+        rm -f /etc/polkit-1/localauthority/50-local.d/10-pymc-repeater.pkla || true
         rm -f /etc/sudoers.d/pymc-repeater
         rm -f /usr/local/bin/pymc-do-upgrade
 
