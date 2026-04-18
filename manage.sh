@@ -260,7 +260,7 @@ install_repeater() {
     fi
 
     # Welcome screen (Bypass if the script was passd with the "install" option, assume we want a silent install)
-    if [ $1 != "install" ]; then
+    if [[ "${1:-}" != "install" ]]; then
         $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
     fi
 
@@ -589,7 +589,7 @@ UPGRADEEOF
         fi
         echo "═══════════════════════════════════════════════════════════════"
         echo ""
-        if [ $1 != "install" ]; then #Headless install support
+        if [[ "${1:-}" != "install" ]]; then #Headless install support
             read -p "Press Enter to return to main menu..." || true
         fi
     else
@@ -1264,7 +1264,7 @@ fi
 # Handle command line arguments
 case "$1" in
     "install")
-        install_repeater
+        install_repeater install
         exit 0
         ;;
     "upgrade")
