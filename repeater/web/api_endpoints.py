@@ -4512,7 +4512,7 @@ class APIEndpoints:
             # Sections we allow to be imported
             ALLOWED_SECTIONS = {
                 "repeater", "mesh", "radio", "identities", "delays",
-                "ch341", "web", "letsmesh", "logging", "radio_type",
+                "ch341", "web", "letsmesh", "glass", "logging", "radio_type",
             }
 
             updated_sections = []

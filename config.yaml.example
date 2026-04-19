@@ -343,6 +343,32 @@ mqtt:
   #     use_jwt_auth: true
   #     enabled: true 
 
+# pyMC_Glass control-plane integration (optional)
+glass:
+  # Enable repeater -> pyMC_Glass /inform loop
+  enabled: false
+
+  # Base URL of Glass backend
+  # Example local dev: "http://localhost:8080"
+  # Example production: "https://glass.example.com"
+  base_url: "http://localhost:8080"
+
+  # Inform interval in seconds (used as initial/default interval;
+  # backend may override via noop.interval response)
+  inform_interval_seconds: 30
+
+  # HTTP timeout per inform request
+  request_timeout_seconds: 10
+
+  # Verify TLS certificates when using HTTPS
+  verify_tls: true
+
+  # Optional bearer token for future authenticated inform endpoints
+  api_token: ""
+
+  # Where cert_renewal payloads are written
+  cert_store_dir: "/etc/pymc_repeater/glass"
+
 logging:
   # Log level: DEBUG, INFO, WARNING, ERROR
   level: INFO

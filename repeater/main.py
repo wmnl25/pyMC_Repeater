@@ -10,6 +10,7 @@ import time
 from repeater.companion.utils import validate_companion_node_name, normalize_companion_identity_key
 from repeater.config import get_radio_for_board, load_config, save_config
 from repeater.config_manager import ConfigManager
+from repeater.data_acquisition.glass_handler import GlassHandler
 from repeater.engine import RepeaterHandler
 from repeater.handler_helpers import (
     AdvertHelper,
@@ -47,6 +48,7 @@ class RepeaterDaemon:
         self.text_helper = None
         self.path_helper = None
         self.protocol_request_helper = None
+        self.glass_handler = None
         self.acl = None
         self.router = None
         self.companion_bridges: dict[int, object] = {}
@@ -336,6 +338,20 @@ class RepeaterDaemon:
 
             # When trace reaches final node, push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)
             self.trace_helper.on_trace_complete = self._on_trace_complete_for_companions
+
+            # Optional pyMC_Glass integration loop (inform/control plane)
+            self.glass_handler = GlassHandler(
+                config=self.config,
+                daemon_instance=self,
+                config_manager=self.config_manager,
+            )
+            await self.glass_handler.start()
+            if (
+                self.repeater_handler
+                and self.repeater_handler.storage
+                and hasattr(self.repeater_handler.storage, "set_glass_publisher")
+            ):
+                self.repeater_handler.storage.set_glass_publisher(self.glass_handler.publish_telemetry)
 
         except Exception as e:
             logger.error(f"Failed to initialize dispatcher: {e}")
@@ -1022,6 +1038,13 @@ class RepeaterDaemon:
                 self.http_server.stop()
             except Exception as e:
                 logger.warning(f"Error stopping HTTP server: {e}")
+
+        # Stop Glass inform loop
+        if self.glass_handler:
+            try:
+                await self.glass_handler.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping Glass handler: {e}")
 
         # Release radio resources
         if self.radio and hasattr(self.radio, "cleanup"):
