@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import subprocess
 import threading
 import time
@@ -42,6 +43,15 @@ PACKAGE_NAME = "pymc_repeater"
 
 # How long (seconds) before a cached check result expires
 CHECK_CACHE_TTL = 600  # 10 minutes
+
+_github_ssl_ctx: Optional[ssl.SSLContext] = None
+
+
+def _get_github_ssl_context() -> ssl.SSLContext:
+    global _github_ssl_ctx
+    if _github_ssl_ctx is None:
+        _github_ssl_ctx = ssl.create_default_context()
+    return _github_ssl_ctx
 
 
 class _RateLimitError(Exception):
@@ -371,6 +381,8 @@ class _UpdateState:
     def append_line(self, line: str) -> None:
         with self._lock:
             self.progress_lines.append(line)
+            if len(self.progress_lines) > 500:
+                self.progress_lines = self.progress_lines[-500:]
 
 
 _state = _UpdateState()
@@ -394,7 +406,8 @@ def _fetch_url(url: str, timeout: int = 10) -> str:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctx = _get_github_ssl_context() if url.startswith("https") else None
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code == 403:

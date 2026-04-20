@@ -728,6 +728,8 @@ class SQLiteHandler:
         """Return CRC error records within the given time window (chronological)."""
         try:
             cutoff = time.time() - (hours * 3600)
+            if limit is None:
+                limit = 1000
             with sqlite3.connect(self.sqlite_path) as conn:
                 conn.row_factory = sqlite3.Row
                 query = """
@@ -735,10 +737,9 @@ class SQLiteHandler:
                     FROM crc_errors
                     WHERE timestamp > ?
                     ORDER BY timestamp DESC
+                    LIMIT ?
                 """
-                if limit:
-                    query += f" LIMIT {int(limit)}"
-                rows = conn.execute(query, (cutoff,)).fetchall()
+                rows = conn.execute(query, (cutoff, int(limit))).fetchall()
                 return [{"timestamp": r["timestamp"], "count": r["count"]} for r in reversed(rows)]
         except Exception as e:
             logger.error(f"Failed to get CRC error history: {e}")
@@ -1116,21 +1117,21 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (hours * 3600)
 
+            if limit is None:
+                limit = 1000
+
             with sqlite3.connect(self.sqlite_path) as conn:
                 conn.row_factory = sqlite3.Row
 
-                # Build query with optional limit
                 query = """
                     SELECT timestamp, noise_floor_dbm
                     FROM noise_floor
                     WHERE timestamp > ?
                     ORDER BY timestamp DESC
+                    LIMIT ?
                 """
 
-                if limit:
-                    query += f" LIMIT {int(limit)}"
-
-                measurements = conn.execute(query, (cutoff,)).fetchall()
+                measurements = conn.execute(query, (cutoff, int(limit))).fetchall()
 
                 # Reverse to get chronological order (oldest to newest)
                 result = [
@@ -1348,6 +1349,9 @@ class SQLiteHandler:
     ) -> List[dict]:
 
         try:
+            if limit is None:
+                limit = 500
+
             with sqlite3.connect(self.sqlite_path) as conn:
                 conn.row_factory = sqlite3.Row
 

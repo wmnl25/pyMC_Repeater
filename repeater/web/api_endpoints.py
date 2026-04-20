@@ -1199,6 +1199,70 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    def memory_debug(self):
+        """Diagnostic endpoint: show what is actually holding memory.
+
+        First call starts tracemalloc and takes a baseline snapshot.
+        Subsequent calls compare against the baseline and return the top
+        allocations that have *grown* since startup — i.e. the real leaks.
+        """
+        import tracemalloc
+
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(10)
+            # Store baseline snapshot for future diffs
+            self._tracemalloc_baseline = tracemalloc.take_snapshot()
+            return self._success({
+                "status": "started",
+                "message": "tracemalloc started — call again after some time to see growth",
+            })
+
+        current = tracemalloc.take_snapshot()
+        baseline = getattr(self, "_tracemalloc_baseline", None)
+
+        # Top 20 allocations right now (grouped by file + line)
+        top_current = current.statistics("lineno")[:20]
+        current_stats = []
+        for stat in top_current:
+            current_stats.append({
+                "file": str(stat.traceback),
+                "size_kb": round(stat.size / 1024, 1),
+                "count": stat.count,
+            })
+
+        result = {"current_top_20": current_stats}
+
+        # If we have a baseline, show what GREW (the actual leaks)
+        if baseline:
+            diff = current.compare_to(baseline, "lineno")
+            growth = [d for d in diff if d.size_diff > 0]
+            growth.sort(key=lambda d: d.size_diff, reverse=True)
+            growth_stats = []
+            for stat in growth[:20]:
+                growth_stats.append({
+                    "file": str(stat.traceback),
+                    "size_diff_kb": round(stat.size_diff / 1024, 1),
+                    "count_diff": stat.count_diff,
+                    "current_size_kb": round(stat.size / 1024, 1),
+                })
+            result["growth_since_baseline"] = growth_stats
+
+        # Also include process-level memory for context
+        try:
+            import resource
+            rusage = resource.getrusage(resource.RUSAGE_SELF)
+            result["rss_mb"] = round(rusage.ru_maxrss / 1024, 1)  # macOS=bytes, Linux=KB
+        except Exception:
+            pass
+
+        traced_current, traced_peak = tracemalloc.get_traced_memory()
+        result["traced_current_mb"] = round(traced_current / (1024 * 1024), 2)
+        result["traced_peak_mb"] = round(traced_peak / (1024 * 1024), 2)
+
+        return self._success(result)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
     def hardware_processes(self):
         """Get summary of top processes"""
         try:
