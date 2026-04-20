@@ -17,9 +17,16 @@ class SQLiteHandler:
         self._init_database()
         self._run_migrations()
 
+    def _connect(self) -> sqlite3.Connection:
+        """Create a connection with WAL mode and busy timeout to avoid 'database is locked' errors."""
+        conn = sqlite3.connect(self.sqlite_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
     def _init_database(self):
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS packets (
@@ -202,7 +209,7 @@ class SQLiteHandler:
     def _run_migrations(self):
         """Run database migrations"""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 # Create migrations table if it doesn't exist
                 conn.execute(
                     """
@@ -472,7 +479,7 @@ class SQLiteHandler:
     def create_api_token(self, name: str, token_hash: str) -> int:
         """Create a new API token entry"""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     "INSERT INTO api_tokens (name, token_hash, created_at) VALUES (?, ?, ?)",
                     (name, token_hash, time.time()),
@@ -485,7 +492,7 @@ class SQLiteHandler:
     def verify_api_token(self, token_hash: str) -> Optional[Dict[str, Any]]:
         """Verify API token and update last_used timestamp"""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     "SELECT id, name, created_at FROM api_tokens WHERE token_hash = ?",
                     (token_hash,),
@@ -510,7 +517,7 @@ class SQLiteHandler:
     def revoke_api_token(self, token_id: int) -> bool:
         """Revoke (delete) an API token"""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
                 return cursor.rowcount > 0
         except Exception as e:
@@ -520,7 +527,7 @@ class SQLiteHandler:
     def list_api_tokens(self) -> List[Dict[str, Any]]:
         """List all API tokens (without sensitive data)"""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     "SELECT id, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
                 )
@@ -537,7 +544,7 @@ class SQLiteHandler:
 
     def store_packet(self, record: dict):
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 orig_path = record.get("original_path")
                 fwd_path = record.get("forwarded_path")
                 try:
@@ -597,7 +604,7 @@ class SQLiteHandler:
 
     def store_advert(self, record: dict):
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 existing = conn.execute(
                     "SELECT pubkey, first_seen, advert_count, zero_hop, rssi, snr FROM adverts WHERE pubkey = ? ORDER BY last_seen DESC LIMIT 1",
@@ -685,7 +692,7 @@ class SQLiteHandler:
 
     def store_noise_floor(self, record: dict):
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO noise_floor (timestamp, noise_floor_dbm)
@@ -699,7 +706,7 @@ class SQLiteHandler:
     def store_crc_errors(self, record: dict):
         """Store a CRC error batch (delta count since last poll)."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute("""
                     INSERT INTO crc_errors (timestamp, count)
                     VALUES (?, ?)
@@ -714,7 +721,7 @@ class SQLiteHandler:
         """Return total CRC errors within the given time window."""
         try:
             cutoff = time.time() - (hours * 3600)
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 row = conn.execute(
                     "SELECT COALESCE(SUM(count), 0) FROM crc_errors WHERE timestamp > ?",
                     (cutoff,)
@@ -730,7 +737,7 @@ class SQLiteHandler:
             cutoff = time.time() - (hours * 3600)
             if limit is None:
                 limit = 1000
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 query = """
                     SELECT timestamp, count
@@ -749,7 +756,7 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (hours * 3600)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 stats = conn.execute(
@@ -813,7 +820,7 @@ class SQLiteHandler:
 
     def get_recent_packets(self, limit: int = 100) -> list:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 packets = conn.execute(
@@ -847,7 +854,7 @@ class SQLiteHandler:
         offset: int = 0,
     ) -> list:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 where_clauses = []
@@ -904,7 +911,7 @@ class SQLiteHandler:
     ) -> list:
         """Lightweight query returning only columns needed for airtime charting."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 where_clauses = []
                 params: list = []
@@ -926,7 +933,7 @@ class SQLiteHandler:
 
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 packet = conn.execute(
@@ -999,7 +1006,7 @@ class SQLiteHandler:
                     15: "Custom Packet (RAW_CUSTOM)",
                 }
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 type_counts = {}
@@ -1036,7 +1043,7 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (hours * 3600)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 route_counts = {}
@@ -1073,7 +1080,7 @@ class SQLiteHandler:
 
     def get_neighbors(self) -> dict:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 neighbors = conn.execute(
@@ -1120,7 +1127,7 @@ class SQLiteHandler:
             if limit is None:
                 limit = 1000
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 query = """
@@ -1149,7 +1156,7 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (hours * 3600)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 stats = conn.execute(
@@ -1201,7 +1208,7 @@ class SQLiteHandler:
             ]
 
             table_info = []
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 # Get actual tables present in the database
                 existing = {
                     row[0]
@@ -1264,7 +1271,7 @@ class SQLiteHandler:
             raise ValueError(f"Table '{table_name}' cannot be purged")
 
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 result = conn.execute(f"DELETE FROM {table_name}")  # noqa: S608
                 conn.commit()
                 logger.info(f"Purged {result.rowcount} rows from {table_name}")
@@ -1276,7 +1283,7 @@ class SQLiteHandler:
     def vacuum(self):
         """Reclaim disk space after purging tables."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute("VACUUM")
             logger.info("Database vacuumed successfully")
         except Exception as e:
@@ -1287,7 +1294,7 @@ class SQLiteHandler:
         try:
             cutoff = time.time() - (days * 24 * 3600)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 result = conn.execute("DELETE FROM packets WHERE timestamp < ?", (cutoff,))
                 packets_deleted = result.rowcount
 
@@ -1312,7 +1319,7 @@ class SQLiteHandler:
 
     def get_cumulative_counts(self) -> dict:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 type_counts = {}
                 for i in range(16):
                     count = conn.execute(
@@ -1352,7 +1359,7 @@ class SQLiteHandler:
             if limit is None:
                 limit = 500
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
                 query = """
@@ -1456,7 +1463,7 @@ class SQLiteHandler:
                 transport_key = self.generate_transport_key(name)
 
             current_time = time.time()
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO transport_keys (name, flood_policy, transport_key, parent_id, last_used, created_at, updated_at)
@@ -1479,7 +1486,7 @@ class SQLiteHandler:
 
     def get_transport_keys(self) -> List[dict]:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     """
@@ -1508,7 +1515,7 @@ class SQLiteHandler:
 
     def get_transport_key_by_id(self, key_id: int) -> Optional[dict]:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     """
@@ -1570,7 +1577,7 @@ class SQLiteHandler:
             params.append(time.time())
             params.append(key_id)
 
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     f"""
                     UPDATE transport_keys SET {', '.join(updates)}
@@ -1585,7 +1592,7 @@ class SQLiteHandler:
 
     def delete_transport_key(self, key_id: int) -> bool:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute("DELETE FROM transport_keys WHERE id = ?", (key_id,))
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1666,7 +1673,7 @@ class SQLiteHandler:
 
         generated_keys = 0
         now = time.time()
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with self._connect() as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("DELETE FROM transport_keys")
             db_ids: Dict[str, int] = {}
@@ -1710,7 +1717,7 @@ class SQLiteHandler:
 
     def delete_advert(self, advert_id: int) -> bool:
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute("DELETE FROM adverts WHERE id = ?", (advert_id,))
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1732,7 +1739,7 @@ class SQLiteHandler:
     ) -> Optional[int]:
         """Insert a new room message and return its ID."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO room_messages (
@@ -1760,7 +1767,7 @@ class SQLiteHandler:
     ) -> List[Dict]:
         """Get messages for a room that client hasn't synced yet."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -1781,7 +1788,7 @@ class SQLiteHandler:
     def get_unsynced_count(self, room_hash: str, client_pubkey: str, sync_since: float) -> int:
         """Count unsynced messages for a client."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     SELECT COUNT(*) FROM room_messages
@@ -1799,7 +1806,7 @@ class SQLiteHandler:
     def upsert_client_sync(self, room_hash: str, client_pubkey: str, **kwargs) -> bool:
         """Insert or update client sync state."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 # Check if exists
                 cursor = conn.execute(
                     """
@@ -1859,7 +1866,7 @@ class SQLiteHandler:
     def get_client_sync(self, room_hash: str, client_pubkey: str) -> Optional[Dict]:
         """Get client sync state."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -1877,7 +1884,7 @@ class SQLiteHandler:
     def get_all_room_clients(self, room_hash: str) -> List[Dict]:
         """Get all clients for a room."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -1895,7 +1902,7 @@ class SQLiteHandler:
     def get_room_message_count(self, room_hash: str) -> int:
         """Get total number of messages in a room."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     SELECT COUNT(*) FROM room_messages WHERE room_hash = ?
@@ -1910,7 +1917,7 @@ class SQLiteHandler:
     def get_room_messages(self, room_hash: str, limit: int = 50, offset: int = 0) -> List[Dict]:
         """Get messages from a room with pagination."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -1931,7 +1938,7 @@ class SQLiteHandler:
     ) -> List[Dict]:
         """Get messages posted after a specific timestamp."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -1950,7 +1957,7 @@ class SQLiteHandler:
     def get_unsynced_count(self, room_hash: str, client_pubkey: str, sync_since: float) -> int:
         """Get count of unsynced messages for a client."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     SELECT COUNT(*) FROM room_messages
@@ -1968,7 +1975,7 @@ class SQLiteHandler:
     def delete_room_message(self, room_hash: str, message_id: int) -> bool:
         """Delete a specific message by ID."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     DELETE FROM room_messages
@@ -1984,7 +1991,7 @@ class SQLiteHandler:
     def clear_room_messages(self, room_hash: str) -> int:
         """Clear all messages from a room."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     """
                     DELETE FROM room_messages WHERE room_hash = ?
@@ -1999,7 +2006,7 @@ class SQLiteHandler:
     def cleanup_old_messages(self, room_hash: str, keep_count: int = 32) -> int:
         """Keep only the most recent N messages per room."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 # First check if cleanup is needed
                 cursor = conn.execute(
                     """
@@ -2035,7 +2042,7 @@ class SQLiteHandler:
     def companion_load_contacts(self, companion_hash: str) -> List[Dict]:
         """Load contacts for a companion from storage."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -2053,7 +2060,7 @@ class SQLiteHandler:
     def companion_save_contacts(self, companion_hash: str, contacts: List[Dict]) -> bool:
         """Replace all contacts for a companion in storage."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_contacts WHERE companion_hash = ?", (companion_hash,)
                 )
@@ -2091,7 +2098,7 @@ class SQLiteHandler:
     def companion_upsert_contact(self, companion_hash: str, contact: dict) -> bool:
         """Insert or update a single contact for a companion in storage."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 now = time.time()
                 conn.execute(
                     """
@@ -2146,7 +2153,7 @@ class SQLiteHandler:
         """
         type_map = {"companion": 1, "repeater": 2, "room_server": 3, "sensor": 4}
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 query = (
                     "SELECT pubkey, node_name, contact_type, latitude, longitude, last_seen "
@@ -2191,7 +2198,7 @@ class SQLiteHandler:
     def companion_load_prefs(self, companion_hash: str) -> Optional[Dict]:
         """Load persisted prefs for a companion. Returns parsed JSON dict or None if no row."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 cursor = conn.execute(
                     "SELECT prefs_json FROM companion_prefs WHERE companion_hash = ?",
                     (companion_hash,),
@@ -2209,7 +2216,7 @@ class SQLiteHandler:
         try:
             prefs_json = json.dumps(prefs)
             key = str(companion_hash) if companion_hash is not None else ""
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO companion_prefs (companion_hash, prefs_json)
@@ -2227,7 +2234,7 @@ class SQLiteHandler:
     def companion_load_channels(self, companion_hash: str) -> List[Dict]:
         """Load channels for a companion from storage."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -2244,7 +2251,7 @@ class SQLiteHandler:
     def companion_save_channels(self, companion_hash: str, channels: List[Dict]) -> bool:
         """Replace all channels for a companion in storage."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_channels WHERE companion_hash = ?", (companion_hash,)
                 )
@@ -2273,7 +2280,7 @@ class SQLiteHandler:
     def companion_load_messages(self, companion_hash: str, limit: int = 100) -> List[Dict]:
         """Load queued messages for a companion (oldest first for queue order)."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
@@ -2295,7 +2302,7 @@ class SQLiteHandler:
             if isinstance(packet_hash, bytes):
                 packet_hash = packet_hash.decode("utf-8", errors="replace") if packet_hash else None
             sender_key = msg.get("sender_key", b"")
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 if packet_hash:
                     cursor = conn.execute(
                         """
@@ -2335,7 +2342,7 @@ class SQLiteHandler:
     def companion_pop_message(self, companion_hash: str) -> Optional[Dict]:
         """Remove and return the oldest message from the companion's queue."""
         try:
-            with sqlite3.connect(self.sqlite_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     """
