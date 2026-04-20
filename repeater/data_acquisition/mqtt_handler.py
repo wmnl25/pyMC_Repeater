@@ -285,6 +285,10 @@ class _BrokerConnection:
     def connect(self):
         """Establish connection to broker"""
         # Conditional TLS setup
+        if self.enabled == False:
+            logger.info(f"Connection to {self.broker['name']} is disabled in configuration")
+            return
+
         if self.transport == "websockets":
             if self.tls and self.tls.get("enabled", True):
                 import ssl
