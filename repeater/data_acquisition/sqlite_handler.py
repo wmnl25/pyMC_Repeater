@@ -852,9 +852,9 @@ class SQLiteHandler:
                     SELECT
                         timestamp, type, route, length, rssi, snr, score,
                         transmitted, is_duplicate, drop_reason, src_hash, dst_hash, path_hash,
-                        header, transport_codes, payload, payload_length,
-                        tx_delay_ms, packet_hash, original_path, forwarded_path, raw_packet,
-                        lbt_attempts, lbt_backoff_delays_ms, lbt_channel_busy
+                        transport_codes, payload, payload_length,
+                        tx_delay_ms, packet_hash, original_path, forwarded_path,
+                        lbt_attempts, lbt_channel_busy
                     FROM packets
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -904,9 +904,9 @@ class SQLiteHandler:
                     SELECT
                         timestamp, type, route, length, rssi, snr, score,
                         transmitted, is_duplicate, drop_reason, src_hash, dst_hash, path_hash,
-                        header, transport_codes, payload, payload_length,
-                        tx_delay_ms, packet_hash, original_path, forwarded_path, raw_packet,
-                        lbt_attempts, lbt_backoff_delays_ms, lbt_channel_busy
+                        transport_codes, payload, payload_length,
+                        tx_delay_ms, packet_hash, original_path, forwarded_path,
+                        lbt_attempts, lbt_channel_busy
                     FROM packets
                 """
 
@@ -954,6 +954,71 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to get airtime data: {e}")
             return []
+
+    def get_airtime_buckets(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+        bucket_seconds: int = 60,
+        sf: int = 9,
+        bw_hz: int = 62500,
+        cr: int = 5,
+        preamble: int = 17,
+    ) -> list:
+        """Return pre-aggregated airtime buckets for chart rendering.
+
+        Applies the Semtech LoRa airtime formula server-side and groups results
+        into time buckets, drastically reducing response size vs raw packet rows.
+        """
+        import math
+
+        bw_khz = bw_hz / 1000
+        t_sym = (2**sf) / bw_khz  # ms per symbol
+        t_preamble = (preamble + 4.25) * t_sym
+        de = 1 if sf >= 11 and bw_hz <= 125000 else 0
+
+        def _airtime_ms(length_bytes: int) -> float:
+            length_bytes = max(length_bytes or 32, 1)
+            numerator = max(8 * length_bytes - 4 * sf + 28 + 16, 0)  # CRC=1, H=0
+            denominator = 4 * (sf - 2 * de)
+            n_payload = 8 + math.ceil(numerator / denominator) * cr
+            return t_preamble + n_payload * t_sym
+
+        try:
+            with self._connect() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT timestamp, length, transmitted FROM packets "
+                    "WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                    (start_timestamp, end_timestamp),
+                ).fetchall()
+
+            buckets: dict = {}
+            rx_total = 0
+            tx_total = 0
+            for row in rows:
+                bucket_ts = int(row["timestamp"] / bucket_seconds) * bucket_seconds
+                ms = _airtime_ms(row["length"])
+                if bucket_ts not in buckets:
+                    buckets[bucket_ts] = {"timestamp": bucket_ts, "rx_ms": 0.0, "tx_ms": 0.0, "rx_count": 0, "tx_count": 0}
+                if row["transmitted"]:
+                    buckets[bucket_ts]["tx_ms"] += ms
+                    buckets[bucket_ts]["tx_count"] += 1
+                    tx_total += 1
+                else:
+                    buckets[bucket_ts]["rx_ms"] += ms
+                    buckets[bucket_ts]["rx_count"] += 1
+                    rx_total += 1
+
+            return {
+                "buckets": sorted(buckets.values(), key=lambda x: x["timestamp"]),
+                "bucket_seconds": bucket_seconds,
+                "rx_total": rx_total,
+                "tx_total": tx_total,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get airtime buckets: {e}")
+            return {"buckets": [], "bucket_seconds": bucket_seconds, "rx_total": 0, "tx_total": 0}
 
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         try:

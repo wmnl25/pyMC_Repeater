@@ -1459,6 +1459,42 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    def airtime_chart_data(
+        self,
+        start_timestamp=None,
+        end_timestamp=None,
+        bucket_seconds=60,
+        sf=9,
+        bw_hz=62500,
+        cr=5,
+        preamble=17,
+    ):
+        """Server-side aggregated airtime utilization for chart rendering.
+
+        Returns pre-bucketed rx_ms/tx_ms per time bucket instead of raw packet rows,
+        reducing response size from potentially hundreds of KB to a few KB.
+        """
+        try:
+            now = __import__("time").time()
+            start_ts = float(start_timestamp) if start_timestamp is not None else now - 86400
+            end_ts = float(end_timestamp) if end_timestamp is not None else now
+            bucket_s = max(10, min(int(bucket_seconds), 3600))
+            result = self._get_storage().get_airtime_buckets(
+                start_timestamp=start_ts,
+                end_timestamp=end_ts,
+                bucket_seconds=bucket_s,
+                sf=int(sf),
+                bw_hz=int(bw_hz),
+                cr=int(cr),
+                preamble=int(preamble),
+            )
+            return self._success(result)
+        except Exception as e:
+            logger.error(f"Error getting airtime chart data: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
     def packet_by_hash(self, packet_hash=None):
         try:
             if not packet_hash:

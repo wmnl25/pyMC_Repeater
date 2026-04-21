@@ -345,6 +345,20 @@ class StorageCollector:
     ) -> list:
         return self.sqlite_handler.get_airtime_data(start_timestamp, end_timestamp, limit)
 
+    def get_airtime_buckets(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+        bucket_seconds: int = 60,
+        sf: int = 9,
+        bw_hz: int = 62500,
+        cr: int = 5,
+        preamble: int = 17,
+    ) -> dict:
+        return self.sqlite_handler.get_airtime_buckets(
+            start_timestamp, end_timestamp, bucket_seconds, sf, bw_hz, cr, preamble
+        )
+
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         return self.sqlite_handler.get_packet_by_hash(packet_hash)
 
