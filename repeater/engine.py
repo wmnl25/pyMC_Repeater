@@ -190,11 +190,12 @@ class RepeaterHandler(BaseHandler):
         original_path_hashes = packet.get_path_hashes_hex()
         path_hash_size = packet.get_path_hash_size()
 
-        # Process for forwarding (skip if repeat disabled or if this is a local transmission)
+        # Process for forwarding (skip if repeat disabled or if this is a local transmission).
+        # Pass pkt_hash_full so flood_forward / direct_forward don't recompute SHA-256.
         result = (
             None
             if (not allow_forward or local_transmission)
-            else self.process_packet(processed_packet, snr)
+            else self.process_packet(processed_packet, snr, packet_hash=pkt_hash_full)
         )
         forwarded_path_hashes = None
 
@@ -305,7 +306,7 @@ class RepeaterHandler(BaseHandler):
             else:
                 # Check if packet has a specific drop reason set by handlers
                 drop_reason = processed_packet.drop_reason or self._get_drop_reason(
-                    processed_packet
+                    processed_packet, packet_hash=pkt_hash_full
                 )
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"Packet not forwarded: {drop_reason}")
@@ -616,9 +617,9 @@ class RepeaterHandler(BaseHandler):
         if pkt_hash:
             self._recent_hash_index[pkt_hash] = packet_record
 
-    def _get_drop_reason(self, packet: Packet) -> str:
+    def _get_drop_reason(self, packet: Packet, packet_hash: Optional[str] = None) -> str:
 
-        if self.is_duplicate(packet):
+        if self.is_duplicate(packet, packet_hash=packet_hash):
             return "Duplicate"
 
         if not packet or not packet.payload:
@@ -646,12 +647,20 @@ class RepeaterHandler(BaseHandler):
         # Default reason
         return "Unknown"
 
-    def is_duplicate(self, packet: Packet) -> bool:
+    def is_duplicate(self, packet: Packet, packet_hash: Optional[str] = None) -> bool:
+        """Return True if this packet has already been seen.
 
-        pkt_hash = packet.calculate_packet_hash().hex().upper()
-        if pkt_hash in self.seen_packets:
-            return True
-        return False
+        Accepts an optional pre-computed packet_hash to avoid a redundant SHA-256
+        when the caller (e.g. __call__ → process_packet → flood/direct_forward)
+        has already calculated the hash.  Falls back to computing it if not provided.
+
+        INVARIANT: this method is synchronous with no await points.  The caller
+        (process_packet / __call__) relies on is_duplicate + mark_seen being
+        effectively atomic within the asyncio event loop.  Do NOT add any await
+        here without revisiting that invariant.
+        """
+        pkt_hash = packet_hash or packet.calculate_packet_hash().hex().upper()
+        return pkt_hash in self.seen_packets
 
     def mark_seen(self, packet: Packet, packet_hash: Optional[str] = None):
 
@@ -796,8 +805,13 @@ class RepeaterHandler(BaseHandler):
             logger.error(f"Transport code validation error: {e}")
             return False, f"Transport code validation error: {e}"
 
-    def flood_forward(self, packet: Packet) -> Optional[Packet]:
+    def flood_forward(self, packet: Packet, packet_hash: Optional[str] = None) -> Optional[Packet]:
+        """Forward a FLOOD packet, appending our hash to the path.
 
+        INVARIANT: purely synchronous — no await points.  The is_duplicate +
+        mark_seen pair is atomic within the asyncio event loop.  Do NOT add any
+        await here without revisiting that invariant in __call__ / process_packet.
+        """
         # Validate
         valid, reason = self.validate_packet(packet)
         if not valid:
@@ -831,8 +845,8 @@ class RepeaterHandler(BaseHandler):
             packet.drop_reason = f"FLOOD loop detected ({mode})"
             return None
 
-        # Suppress duplicates
-        if self.is_duplicate(packet):
+        # Suppress duplicates — pass pre-computed hash to avoid a second SHA-256.
+        if self.is_duplicate(packet, packet_hash=packet_hash):
             packet.drop_reason = "Duplicate"
             return None
 
@@ -854,7 +868,7 @@ class RepeaterHandler(BaseHandler):
             packet.drop_reason = "Path would exceed MAX_PATH_SIZE"
             return None
 
-        self.mark_seen(packet)
+        self.mark_seen(packet, packet_hash=packet_hash)
 
         # Append hash_size bytes from our public key prefix
         packet.path.extend(self.local_hash_bytes[:hash_size])
@@ -862,8 +876,13 @@ class RepeaterHandler(BaseHandler):
 
         return packet
 
-    def direct_forward(self, packet: Packet) -> Optional[Packet]:
+    def direct_forward(self, packet: Packet, packet_hash: Optional[str] = None) -> Optional[Packet]:
+        """Forward a DIRECT packet, removing the first hop from the path.
 
+        INVARIANT: purely synchronous — no await points.  The is_duplicate +
+        mark_seen pair is atomic within the asyncio event loop.  Do NOT add any
+        await here without revisiting that invariant in __call__ / process_packet.
+        """
         # Validate packet (empty payload, oversized path, etc.)
         valid, reason = self.validate_packet(packet)
         if not valid:
@@ -889,12 +908,12 @@ class RepeaterHandler(BaseHandler):
             packet.drop_reason = "Direct: not for us"
             return None
 
-        # Suppress duplicates
-        if self.is_duplicate(packet):
+        # Suppress duplicates — pass pre-computed hash to avoid a second SHA-256.
+        if self.is_duplicate(packet, packet_hash=packet_hash):
             packet.drop_reason = "Duplicate"
             return None
 
-        self.mark_seen(packet)
+        self.mark_seen(packet, packet_hash=packet_hash)
 
         # Remove first hash entry (hash_size bytes)
         packet.path = bytearray(packet.path[hash_size:])
@@ -978,19 +997,30 @@ class RepeaterHandler(BaseHandler):
 
         return delay_s
 
-    def process_packet(self, packet: Packet, snr: float = 0.0) -> Optional[Tuple[Packet, float]]:
+    def process_packet(
+        self,
+        packet: Packet,
+        snr: float = 0.0,
+        packet_hash: Optional[str] = None,
+    ) -> Optional[Tuple[Packet, float]]:
+        """Route a received packet to flood_forward or direct_forward.
 
+        packet_hash is the pre-computed SHA-256 hex string from __call__.
+        Passing it here avoids recomputing the hash in flood_forward /
+        direct_forward / is_duplicate / mark_seen — reducing SHA-256 calls
+        from 3 per forwarded packet to 1.
+        """
         route_type = packet.header & PH_ROUTE_MASK
 
         if route_type == ROUTE_TYPE_FLOOD or route_type == ROUTE_TYPE_TRANSPORT_FLOOD:
-            fwd_pkt = self.flood_forward(packet)
+            fwd_pkt = self.flood_forward(packet, packet_hash=packet_hash)
             if fwd_pkt is None:
                 return None
             delay = self._calculate_tx_delay(fwd_pkt, snr)
             return fwd_pkt, delay
 
         elif route_type == ROUTE_TYPE_DIRECT or route_type == ROUTE_TYPE_TRANSPORT_DIRECT:
-            fwd_pkt = self.direct_forward(packet)
+            fwd_pkt = self.direct_forward(packet, packet_hash=packet_hash)
             if fwd_pkt is None:
                 return None
             delay = self._calculate_tx_delay(fwd_pkt, snr)
