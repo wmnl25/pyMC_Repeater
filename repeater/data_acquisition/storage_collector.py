@@ -60,11 +60,19 @@ class StorageCollector:
 
         # Initialize WebSocket handler for real-time updates
         self.websocket_available = False
+        self.websocket_has_connected_clients = lambda: False
+        self._last_ws_stats_broadcast: float = 0.0
+        self._ws_stats_broadcast_interval_sec: float = 5.0
         try:
-            from .websocket_handler import broadcast_packet, broadcast_stats
+            from .websocket_handler import (
+                broadcast_packet,
+                broadcast_stats,
+                has_connected_clients,
+            )
 
             self.websocket_broadcast_packet = broadcast_packet
             self.websocket_broadcast_stats = broadcast_stats
+            self.websocket_has_connected_clients = has_connected_clients
             self.websocket_available = True
             logger.info("WebSocket handler initialized for real-time updates")
         except ImportError:
@@ -182,16 +190,23 @@ class StorageCollector:
         if self.websocket_available:
             try:
                 self.websocket_broadcast_packet(packet_record)
-                packet_stats_24h = self.sqlite_handler.get_packet_stats(hours=24)
-                uptime_seconds = (
-                    time.time() - self.repeater_handler.start_time if self.repeater_handler else 0
-                )
-                self.websocket_broadcast_stats(
-                    {
-                        "packet_stats": packet_stats_24h,
-                        "system_stats": {"uptime_seconds": uptime_seconds},
-                    }
-                )
+                if self.websocket_has_connected_clients():
+                    now_mono = time.monotonic()
+                    if (
+                        now_mono - self._last_ws_stats_broadcast
+                        >= self._ws_stats_broadcast_interval_sec
+                    ):
+                        self._last_ws_stats_broadcast = now_mono
+                        packet_stats_24h = self.sqlite_handler.get_packet_stats(hours=24)
+                        uptime_seconds = (
+                            time.time() - self.repeater_handler.start_time if self.repeater_handler else 0
+                        )
+                        self.websocket_broadcast_stats(
+                            {
+                                "packet_stats": packet_stats_24h,
+                                "system_stats": {"uptime_seconds": uptime_seconds},
+                            }
+                        )
             except Exception as e:
                 logger.debug(f"WebSocket broadcast failed: {e}")
 
