@@ -362,13 +362,13 @@ class RepeaterHandler(BaseHandler):
         )
 
         # Store packet record to persistent storage
-        # Skip LetsMesh only for invalid packets (not duplicates or operational drops)
+        # Skip mqtt only for invalid packets (not duplicates or operational drops)
         if self.storage:
             try:
-                # Only skip LetsMesh for actual invalid/bad packets
+                # Only skip mqtt for actual invalid/bad packets
                 invalid_reasons = ["Invalid advert packet", "Empty payload", "Path too long"]
-                skip_letsmesh = drop_reason in invalid_reasons if drop_reason else False
-                self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=skip_letsmesh)
+                skip_mqtt = drop_reason in invalid_reasons if drop_reason else False
+                self.storage.record_packet(packet_record, skip_mqtt_if_invalid=skip_mqtt)
             except Exception as e:
                 logger.error(f"Failed to store packet record: {e}")
 
@@ -445,7 +445,7 @@ class RepeaterHandler(BaseHandler):
             packet_hash=packet.calculate_packet_hash().hex().upper(),
         )
         try:
-            self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+            self.storage.record_packet(packet_record, skip_mqtt_if_invalid=False)
         except Exception as e:
             logger.error(f"Failed to store packet record (record_packet_only): {e}")
             return
@@ -487,7 +487,7 @@ class RepeaterHandler(BaseHandler):
 
         if self.storage:
             try:
-                self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+                self.storage.record_packet(packet_record, skip_mqtt_if_invalid=False)
             except Exception as e:
                 logger.error(f"Failed to store duplicate record: {e}")
 
@@ -1145,7 +1145,7 @@ class RepeaterHandler(BaseHandler):
                     "unscoped_flood_allow": self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True)),
                     "path_hash_mode": self.config.get("mesh", {}).get("path_hash_mode", 0),
                 },
-                "letsmesh": self.config.get("letsmesh", {}),
+                "mqtt_brokers": self.config.get("mqtt_brokers", {}),
             },
             "public_key": None,
         }
