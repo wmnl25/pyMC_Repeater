@@ -23,6 +23,10 @@ class RRDToolHandler:
         self._pending_rrd_update = None
         self._last_rrd_info_time = 0
         self._last_rrd_info_cache = None
+        # Read-side cache: rrdtool.fetch() returns 24 h of data and is a
+        # blocking disk read.  Cache the result for 60 s — matching the RRD
+        # step size — so repeated dashboard refreshes don't hammer the SD card.
+        self._get_data_cache: tuple = (0.0, None)  # (fetched_at, result)
 
     def _init_rrd(self):
         if not self.available:
@@ -162,9 +166,20 @@ class RRDToolHandler:
             )
             return None
 
+        # Serve from cache if result is still fresh.  RRD step is 60 s, so
+        # anything newer than that is guaranteed to be identical to a live fetch.
+        # Only the default (full 24-hour, no explicit bounds) call is cached —
+        # explicit start/end requests always bypass the cache.
+        now = time.time()
+        use_cache = start_time is None and end_time is None
+        if use_cache:
+            cache_fetched_at, cache_result = self._get_data_cache
+            if now - cache_fetched_at < 60.0 and cache_result is not None:
+                return cache_result
+
         try:
             if end_time is None:
-                end_time = int(time.time())
+                end_time = int(now)
             if start_time is None:
                 start_time = end_time - (24 * 3600)
 
@@ -219,6 +234,10 @@ class RRDToolHandler:
                 current_time += step
 
             result["timestamps"] = timestamps
+
+            # Populate read cache for default (unconstrained) calls only.
+            if use_cache:
+                self._get_data_cache = (now, result)
 
             return result
 
