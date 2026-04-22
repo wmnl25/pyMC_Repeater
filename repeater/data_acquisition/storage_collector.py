@@ -241,7 +241,7 @@ class StorageCollector:
 
     def _publish_advert_sync(self, advert_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish("advert", advert_record)
+            self.mqtt_handler.publish_mqtt(advert_record, "advert")
         self._publish_to_glass(advert_record, "advert")
 
     def record_noise_floor(self, noise_floor_dbm: float):
@@ -263,7 +263,7 @@ class StorageCollector:
 
     def _publish_noise_floor_sync(self, noise_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish("noise_floor", noise_record)
+            self.mqtt_handler.publish_mqtt(noise_record, "noise_floor")
         self._publish_to_glass(noise_record, "noise_floor")
 
     def record_crc_errors(self, count: int):
@@ -285,7 +285,7 @@ class StorageCollector:
 
     def _publish_crc_errors_sync(self, crc_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish("crc_errors", crc_record)
+            self.mqtt_handler.publish_mqtt(crc_record, "crc_errors")
         self._publish_to_glass(crc_record, "crc_errors")
 
     def get_crc_error_count(self, hours: int = 24) -> int:

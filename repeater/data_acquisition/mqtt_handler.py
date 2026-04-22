@@ -806,7 +806,7 @@ class MeshCoreToMqttPusher:
         return results
     
 
-    def publish_mqtt(self, subtopic: str, payload: dict, retain: bool = False, qos: int = 0):
+    def publish_mqtt(self, payload: dict, subtopic: str, retain: bool = False, qos: int = 0):
         """Publish message to all connected brokers"""
         message = json.dumps(payload)
 
