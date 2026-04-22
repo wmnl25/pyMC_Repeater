@@ -168,11 +168,12 @@ class RepeaterHandler(BaseHandler):
         allow_forward = mode == "forward"
         allow_local_tx = mode != "no_tx"
 
-        logger.debug(
-            f"RX packet: header=0x{packet.header:02x}, payload_len={len(packet.payload or b'')}, "
-            f"path_len={len(packet.path) if packet.path else 0}, "
-            f"rssi={metadata.get('rssi', 'N/A')}, snr={metadata.get('snr', 'N/A')}, mode={mode}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"RX packet: header=0x{packet.header:02x}, payload_len={len(packet.payload or b'')}, "
+                f"path_len={len(packet.path) if packet.path else 0}, "
+                f"rssi={metadata.get('rssi', 'N/A')}, snr={metadata.get('snr', 'N/A')}, mode={mode}"
+            )
 
         # clone the packet to avoid modifying the original
         processed_packet = copy.deepcopy(packet)
@@ -205,7 +206,8 @@ class RepeaterHandler(BaseHandler):
             delay = self._calculate_tx_delay(packet, snr)
             result = (packet, delay)
             forwarded_path_hashes = packet.get_path_hashes_hex()
-            logger.debug(f"Local transmission: calculated delay {delay:.3f}s")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Local transmission: calculated delay {delay:.3f}s")
 
         if result:
             fwd_pkt, delay = result
@@ -305,7 +307,8 @@ class RepeaterHandler(BaseHandler):
                 drop_reason = processed_packet.drop_reason or self._get_drop_reason(
                     processed_packet
                 )
-                logger.debug(f"Packet not forwarded: {drop_reason}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Packet not forwarded: {drop_reason}")
 
         # Extract packet type and route from header
         if not hasattr(packet, "header") or packet.header is None:
@@ -316,9 +319,10 @@ class RepeaterHandler(BaseHandler):
             header_info = PacketHeaderUtils.parse_header(packet.header)
             payload_type = header_info["payload_type"]
             route_type = header_info["route_type"]
-            logger.debug(
-                f"Packet header=0x{packet.header:02x}, type={payload_type}, route={route_type}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Packet header=0x{packet.header:02x}, type={payload_type}, route={route_type}"
+                )
 
         # Check if this is a duplicate
         is_dupe = pkt_hash_full in self.seen_packets and not transmitted
@@ -750,9 +754,10 @@ class RepeaterHandler(BaseHandler):
                     transport_key = base64.b64decode(transport_key_encoded)
                     expected_code = calc_transport_code(transport_key, packet)
                     if transport_code_0 == expected_code:
-                        logger.debug(
-                            f"Transport code validated for key '{key_name}' with policy '{flood_policy}'"
-                        )
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                f"Transport code validated for key '{key_name}' with policy '{flood_policy}'"
+                            )
 
                         # Update last_used timestamp for this key
                         try:
@@ -761,9 +766,10 @@ class RepeaterHandler(BaseHandler):
                                 self.storage.update_transport_key(
                                     key_id=key_id, last_used=time.time()
                                 )
-                                logger.debug(
-                                    f"Updated last_used timestamp for transport key '{key_name}'"
-                                )
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(
+                                        f"Updated last_used timestamp for transport key '{key_name}'"
+                                    )
                         except Exception as e:
                             logger.warning(
                                 f"Failed to update last_used for transport key '{key_name}': {e}"
@@ -780,9 +786,10 @@ class RepeaterHandler(BaseHandler):
                     continue
 
             # No matching transport code found
-            logger.debug(
-                f"Transport code 0x{transport_code_0:04X} denied (checked {len(transport_keys)} keys)"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Transport code 0x{transport_code_0:04X} denied (checked {len(transport_keys)} keys)"
+                )
             return False, "No matching transport code"
 
         except Exception as e:
@@ -954,18 +961,20 @@ class RepeaterHandler(BaseHandler):
             # score 0.0 → multiplier 1.0 (100% of original)
             score_multiplier = max(0.2, 1.0 - score)
             delay_s = delay_s * score_multiplier
-            logger.debug(
-                f"Congestion detected (delay >= 50ms), score={score:.2f}, "
-                f"delay multiplier={score_multiplier:.2f}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Congestion detected (delay >= 50ms), score={score:.2f}, "
+                    f"delay multiplier={score_multiplier:.2f}"
+                )
 
         # Cap at 5 seconds maximum
         delay_s = min(delay_s, 5.0)
 
-        logger.debug(
-            f"Route={'FLOOD' if route_type == ROUTE_TYPE_FLOOD else 'DIRECT'}, "
-            f"len={packet_len}B, airtime={airtime_ms:.1f}ms, delay={delay_s:.3f}s"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"Route={'FLOOD' if route_type == ROUTE_TYPE_FLOOD else 'DIRECT'}, "
+                f"len={packet_len}B, airtime={airtime_ms:.1f}ms, delay={delay_s:.3f}s"
+            )
 
         return delay_s
 
