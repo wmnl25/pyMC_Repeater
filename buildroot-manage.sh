@@ -95,44 +95,46 @@ prompt_secret() {
     local prompt="$1"
 
     python3 - "$prompt" <<'PY'
+import os
 import sys
 import termios
 import tty
 
 prompt = sys.argv[1]
-
-if not sys.stdin.isatty():
+try:
+    tty_stream = open("/dev/tty", "r+", encoding="utf-8", newline="")
+except OSError:
     print("Interactive admin password prompt requires a TTY. Set PYMC_ADMIN_PASSWORD instead.", file=sys.stderr)
     raise SystemExit(1)
 
-fd = sys.stdin.fileno()
+fd = tty_stream.fileno()
 
 def read_secret(label: str) -> str:
-    sys.stderr.write(f"{label}: ")
-    sys.stderr.flush()
+    tty_stream.write(f"{label}: ")
+    tty_stream.flush()
     original = termios.tcgetattr(fd)
     chars = []
     try:
         tty.setraw(fd)
         while True:
-            ch = sys.stdin.read(1)
+            ch = tty_stream.read(1)
             if ch in ("\r", "\n"):
-                sys.stderr.write("\n")
-                sys.stderr.flush()
+                tty_stream.write("\n")
+                tty_stream.flush()
                 return "".join(chars)
             if ch == "\x03":
                 raise KeyboardInterrupt
             if ch in ("\x7f", "\b"):
                 if chars:
                     chars.pop()
-                    sys.stderr.write("\b \b")
-                    sys.stderr.flush()
+                    tty_stream.write("\b \b")
+                    tty_stream.flush()
                 continue
             if not ch or ord(ch) < 32:
                 continue
             chars.append(ch)
-            sys.stderr.write("*")
-            sys.stderr.flush()
+            tty_stream.write("*")
+            tty_stream.flush()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, original)
 
@@ -152,6 +154,8 @@ while True:
 
     print(first)
     break
+
+tty_stream.close()
 PY
 }
 
@@ -1107,9 +1111,9 @@ Commands:
   doctor      Check Buildroot/Luckfox prerequisites
   install     Install pyMC Repeater on the Buildroot image
   upgrade     Upgrade the Buildroot installation from the checked-out repo
-  configure   Prompt for repeater settings and rewrite config.yaml
+  config      Prompt for repeater settings and rewrite config.yaml
+  configure   Same as config
   radio-profile  Reapply the Luckfox board radio config only
-  config      Run the stock interactive config flow
   start       Start the init.d service
   stop        Stop the init.d service
   restart     Restart the init.d service
@@ -1130,15 +1134,11 @@ case "${1:-}" in
     upgrade)
         upgrade_repeater
         ;;
-    configure)
+    config|configure)
         configure_repeater
         ;;
     radio-profile)
         configure_radio_profile
-        ;;
-    config)
-        shift
-        delegate_to_stock_manage config "$@"
         ;;
     start|stop|restart)
         manage_service "$1"
