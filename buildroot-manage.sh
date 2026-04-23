@@ -19,8 +19,33 @@ SERVICE_NAME="pymc-repeater"
 SILENT_MODE="${PYMC_SILENT:-${SILENT:-}}"
 
 R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
+PIWHEELS_INDEX_URL="https://www.piwheels.org/simple"
 R2_ENABLED=1
-BINARY_ONLY_PACKAGES="pyyaml,pycryptodome,cffi,PyNaCl,psutil"
+PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
+PYMC_CORE_REF="${PYMC_CORE_REF:-dev}"
+WHEEL_DEPENDENCIES=(
+    "pyyaml>=6.0.0"
+    "cherrypy>=18.0.0"
+    "cherrypy-cors==1.7.0"
+    "paho-mqtt>=1.6.0"
+    "psutil>=5.9.0"
+    "pyjwt>=2.8.0"
+    "ws4py>=0.6.0"
+    "pycryptodome>=3.23.0"
+    "PyNaCl>=1.5.0"
+    "cffi"
+    "pyserial"
+    "pyusb"
+    "spidev"
+    "python-periphery"
+    "autocommand"
+    "jaraco.collections"
+    "jaraco.text"
+    "jaraco.context"
+    "tempora"
+    "zc.lockfile"
+    "httpagentparser>=1.5"
+)
 
 stage() {
     printf '\n==> %s\n' "$1"
@@ -168,20 +193,47 @@ preinstall_r2_wheels() {
     info "Wheel cache step finished"
 }
 
-install_repo_into_venv() {
+install_buildroot_dependencies() {
     local wheel_base
 
     wheel_base=$(get_r2_wheel_base 2>/dev/null || true)
+    stage "Installing Python dependency wheels"
     if [ -n "$wheel_base" ]; then
-        info "Final install will prefer Rightup prebuilt wheels"
-        info "Wheel index: ${wheel_base}/index.html"
-        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir \
-            --find-links "${wheel_base}/index.html" --prefer-binary \
-            --only-binary "${BINARY_ONLY_PACKAGES}" --no-build-isolation .[hardware])
-    else
-        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir \
-            --only-binary "${BINARY_ONLY_PACKAGES}" --no-build-isolation .[hardware])
+        info "Using Rightup wheels: ${wheel_base}/index.html"
     fi
+    info "Using piwheels fallback: ${PIWHEELS_INDEX_URL}"
+
+    if [ -n "$wheel_base" ]; then
+        "$VENV_PIP" install --upgrade --no-cache-dir --only-binary=:all: \
+            --find-links "${wheel_base}/index.html" \
+            --extra-index-url "${PIWHEELS_INDEX_URL}" \
+            "${WHEEL_DEPENDENCIES[@]}"
+    else
+        "$VENV_PIP" install --upgrade --no-cache-dir --only-binary=:all: \
+            --extra-index-url "${PIWHEELS_INDEX_URL}" \
+            "${WHEEL_DEPENDENCIES[@]}"
+    fi
+}
+
+install_core_into_venv() {
+    local core_repo core_spec
+
+    core_repo="$PYMC_CORE_REPO"
+    case "$core_repo" in
+        *.git) ;;
+        *) core_repo="${core_repo}.git" ;;
+    esac
+    core_spec="pyMC_core[hardware] @ git+${core_repo}@${PYMC_CORE_REF}"
+    stage "Installing pyMC_core"
+    info "Repo: ${PYMC_CORE_REPO}"
+    info "Ref: ${PYMC_CORE_REF}"
+    "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$core_spec"
+}
+
+install_repeater_package() {
+    stage "Installing pyMC Repeater into venv"
+    info "Installing checked-out repo without re-resolving dependencies"
+    "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$SCRIPT_DIR"
 }
 
 create_init_script() {
@@ -356,20 +408,10 @@ install_repeater() {
         info "Using fallback version: 1.0.5"
     fi
 
-    if ! grep -q "Luckfox Pico" /proc/device-tree/model 2>/dev/null; then
-        export PIP_ONLY_BINARY="${BINARY_ONLY_PACKAGES}"
-        info "Non-Luckfox board detected; preferring binary wheels for heavy packages"
-    else
-        export PIP_ONLY_BINARY="${BINARY_ONLY_PACKAGES}"
-        info "Buildroot install will use binary-only wheels for heavy packages"
-    fi
-
     preinstall_r2_wheels
-
-    stage "Installing pyMC Repeater into venv"
-    info "Running pip install for the checked-out repo"
-    info "This is the slowest step and may take several minutes."
-    install_repo_into_venv
+    install_buildroot_dependencies
+    install_core_into_venv
+    install_repeater_package
 
     stage "Writing Buildroot init service"
     create_init_script
@@ -393,7 +435,9 @@ upgrade_repeater() {
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
-    install_repo_into_venv
+    install_buildroot_dependencies
+    install_core_into_venv
+    install_repeater_package
     "$INIT_SCRIPT" restart
 }
 
