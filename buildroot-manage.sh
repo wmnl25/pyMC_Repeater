@@ -25,21 +25,13 @@ PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
 PYMC_CORE_REF="${PYMC_CORE_REF:-dev}"
 set_wheel_dependencies() {
     set -- \
-        "pyyaml>=6.0.0" \
         "cherrypy>=18.0.0" \
         "cherrypy-cors==1.7.0" \
         "paho-mqtt>=1.6.0" \
-        "psutil>=5.9.0" \
         "pyjwt>=2.8.0" \
         "ws4py>=0.6.0" \
-        "pycryptodome>=3.23.0" \
-        "PyNaCl>=1.5.0" \
-        "cffi" \
-        "pyserial" \
-        "pyusb" \
-        "spidev" \
-        "python-periphery" \
         "autocommand" \
+        "backports.tarfile" \
         "jaraco.collections" \
         "jaraco.text" \
         "jaraco.context" \
@@ -231,10 +223,8 @@ preinstall_r2_wheels() {
     [ -n "$wheel_base" ] || return 0
 
     stage "Checking optional wheel cache"
-    info "Trying prebuilt Python wheels from ${wheel_base}/index.html"
-    "$VENV_PIP" install --find-links "${wheel_base}/index.html" --only-binary=:all: --no-cache-dir \
-        "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" >/dev/null 2>&1 || true
-    info "Wheel cache step finished"
+    info "Native Python modules come from the Buildroot image."
+    info "Skipping native wheel preload from ${wheel_base}/index.html"
 }
 
 install_buildroot_dependencies() {
@@ -261,6 +251,34 @@ install_buildroot_dependencies() {
             --extra-index-url "${PIWHEELS_INDEX_URL}" \
             $deps
     fi
+}
+
+link_system_site_packages() {
+    local venv_site_dir pth_file system_paths
+
+    venv_site_dir=$("$VENV_PYTHON" - <<'PY'
+import site
+for path in site.getsitepackages():
+    if path.endswith("site-packages"):
+        print(path)
+        break
+PY
+)
+    [ -n "$venv_site_dir" ] || fail "Could not determine venv site-packages directory."
+
+    system_paths=$(python3 - <<'PY'
+import site
+for path in site.getsitepackages():
+    if path.startswith("/usr/lib/python") and path.endswith("site-packages"):
+        print(path)
+PY
+)
+
+    [ -n "$system_paths" ] || return 0
+
+    pth_file="$venv_site_dir/buildroot-system-site-packages.pth"
+    printf '%s\n' "$system_paths" > "$pth_file"
+    info "Linked image-provided Python runtime into the venv"
 }
 
 install_core_into_venv() {
@@ -493,6 +511,7 @@ install_repeater() {
     install_buildroot_dependencies
     install_core_into_venv
     install_repeater_package
+    link_system_site_packages
 
     stage "Validating installed runtime"
     if check_venv_runtime; then
@@ -527,6 +546,7 @@ upgrade_repeater() {
     install_buildroot_dependencies
     install_core_into_venv
     install_repeater_package
+    link_system_site_packages
     stage "Validating installed runtime"
     if check_venv_runtime; then
         info "Installed Python runtime looks usable"
