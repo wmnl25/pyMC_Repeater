@@ -23,29 +23,31 @@ PIWHEELS_INDEX_URL="https://www.piwheels.org/simple"
 R2_ENABLED=1
 PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
 PYMC_CORE_REF="${PYMC_CORE_REF:-dev}"
-WHEEL_DEPENDENCIES=(
-    "pyyaml>=6.0.0"
-    "cherrypy>=18.0.0"
-    "cherrypy-cors==1.7.0"
-    "paho-mqtt>=1.6.0"
-    "psutil>=5.9.0"
-    "pyjwt>=2.8.0"
-    "ws4py>=0.6.0"
-    "pycryptodome>=3.23.0"
-    "PyNaCl>=1.5.0"
-    "cffi"
-    "pyserial"
-    "pyusb"
-    "spidev"
-    "python-periphery"
-    "autocommand"
-    "jaraco.collections"
-    "jaraco.text"
-    "jaraco.context"
-    "tempora"
-    "zc.lockfile"
-    "httpagentparser>=1.5"
-)
+set_wheel_dependencies() {
+    set -- \
+        "pyyaml>=6.0.0" \
+        "cherrypy>=18.0.0" \
+        "cherrypy-cors==1.7.0" \
+        "paho-mqtt>=1.6.0" \
+        "psutil>=5.9.0" \
+        "pyjwt>=2.8.0" \
+        "ws4py>=0.6.0" \
+        "pycryptodome>=3.23.0" \
+        "PyNaCl>=1.5.0" \
+        "cffi" \
+        "pyserial" \
+        "pyusb" \
+        "spidev" \
+        "python-periphery" \
+        "autocommand" \
+        "jaraco.collections" \
+        "jaraco.text" \
+        "jaraco.context" \
+        "tempora" \
+        "zc.lockfile" \
+        "httpagentparser>=1.5"
+    printf '%s\n' "$@"
+}
 
 stage() {
     printf '\n==> %s\n' "$1"
@@ -195,8 +197,10 @@ preinstall_r2_wheels() {
 
 install_buildroot_dependencies() {
     local wheel_base
+    local deps
 
     wheel_base=$(get_r2_wheel_base 2>/dev/null || true)
+    deps=$(set_wheel_dependencies)
     stage "Installing Python dependency wheels"
     if [ -n "$wheel_base" ]; then
         info "Using Rightup wheels: ${wheel_base}/index.html"
@@ -204,14 +208,16 @@ install_buildroot_dependencies() {
     info "Using piwheels fallback: ${PIWHEELS_INDEX_URL}"
 
     if [ -n "$wheel_base" ]; then
+        # shellcheck disable=SC2086
         "$VENV_PIP" install --upgrade --no-cache-dir --only-binary=:all: \
             --find-links "${wheel_base}/index.html" \
             --extra-index-url "${PIWHEELS_INDEX_URL}" \
-            "${WHEEL_DEPENDENCIES[@]}"
+            $deps
     else
+        # shellcheck disable=SC2086
         "$VENV_PIP" install --upgrade --no-cache-dir --only-binary=:all: \
             --extra-index-url "${PIWHEELS_INDEX_URL}" \
-            "${WHEEL_DEPENDENCIES[@]}"
+            $deps
     fi
 }
 
