@@ -157,11 +157,35 @@ ensure_venv() {
         info "This can take a minute on Buildroot flash storage."
         python3 -m venv --system-site-packages "$VENV_DIR"
         info "Bootstrapping pip, setuptools, and wheel"
-        "$VENV_PIP" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
         info "Virtual environment is ready"
     else
         info "Using existing virtual environment at $VENV_DIR"
     fi
+}
+
+ensure_venv_build_backend() {
+    if "$VENV_PYTHON" - <<'PY'
+import setuptools
+import setuptools.build_meta
+import wheel
+PY
+    then
+        info "venv build backend is ready"
+        return 0
+    fi
+
+    stage "Repairing venv build backend"
+    info "Ensuring pip, setuptools, and wheel are installed inside the venv"
+    "$VENV_PYTHON" -m ensurepip --upgrade >/dev/null 2>&1 || true
+    "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
+
+    "$VENV_PYTHON" - <<'PY'
+import setuptools
+import setuptools.build_meta
+import wheel
+PY
+    info "venv build backend repaired"
 }
 
 get_r2_wheel_base() {
@@ -433,6 +457,7 @@ install_repeater() {
     cp "$SCRIPT_DIR/radio-presets.json" "$DATA_DIR/" 2>/dev/null || true
 
     ensure_venv
+    ensure_venv_build_backend
 
     if [ -d "$SCRIPT_DIR/.git" ]; then
         stage "Inspecting checked-out repo version"
@@ -477,6 +502,7 @@ upgrade_repeater() {
     is_installed || fail "Service is not installed."
 
     ensure_venv
+    ensure_venv_build_backend
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
