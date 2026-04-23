@@ -116,7 +116,7 @@ def read_secret(label: str) -> str:
         while True:
             ch = os.read(tty_fd, 1)
             if ch in (b"\r", b"\n"):
-                os.write(tty_fd, b"\n")
+                os.write(tty_fd, b"\r\n")
                 return "".join(chars)
             if ch == b"\x03":
                 raise KeyboardInterrupt
@@ -800,20 +800,11 @@ seed_repeater_config() {
     preset_title=$(select_radio_preset)
     info "Using preset: $preset_title"
 
-    freq_mhz="${PYMC_RADIO_FREQUENCY_MHZ:-}"
-    [ -n "$freq_mhz" ] || freq_mhz=$(prompt_value "Frequency MHz" "$(get_radio_preset_field "$preset_title" frequency)")
-
-    sf="${PYMC_RADIO_SF:-}"
-    [ -n "$sf" ] || sf=$(prompt_value "Spreading factor" "$(get_radio_preset_field "$preset_title" spreading_factor)")
-
-    bw_khz="${PYMC_RADIO_BANDWIDTH_KHZ:-}"
-    [ -n "$bw_khz" ] || bw_khz=$(prompt_value "Bandwidth kHz" "$(get_radio_preset_field "$preset_title" bandwidth)")
-
-    coding_rate="${PYMC_RADIO_CODING_RATE:-}"
-    [ -n "$coding_rate" ] || coding_rate=$(prompt_value "Coding rate" "$(get_radio_preset_field "$preset_title" coding_rate)")
-
-    tx_power="${PYMC_RADIO_TX_POWER_DBM:-}"
-    [ -n "$tx_power" ] || tx_power=$(prompt_value "TX power dBm" "$(get_config_value radio.tx_power 22)")
+    freq_mhz="${PYMC_RADIO_FREQUENCY_MHZ:-$(get_radio_preset_field "$preset_title" frequency)}"
+    sf="${PYMC_RADIO_SF:-$(get_radio_preset_field "$preset_title" spreading_factor)}"
+    bw_khz="${PYMC_RADIO_BANDWIDTH_KHZ:-$(get_radio_preset_field "$preset_title" bandwidth)}"
+    coding_rate="${PYMC_RADIO_CODING_RATE:-$(get_radio_preset_field "$preset_title" coding_rate)}"
+    tx_power="${PYMC_RADIO_TX_POWER_DBM:-$(get_config_value radio.tx_power 22)}"
 
     write_repeater_config "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key"
     info "Saved config for ${node_name}"
