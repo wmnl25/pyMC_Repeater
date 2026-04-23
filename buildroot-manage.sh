@@ -114,24 +114,6 @@ install_system_packages() {
         libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
 }
 
-ensure_yq() {
-    local yq_version="v4.40.5"
-    local yq_binary="yq_linux_arm64"
-
-    if command -v yq >/dev/null 2>&1 && yq --version 2>&1 | grep -q 'mikefarah/yq'; then
-        return 0
-    fi
-
-    case "$(uname -m)" in
-        x86_64) yq_binary="yq_linux_amd64" ;;
-        armv7*|armv6*|armhf) yq_binary="yq_linux_arm" ;;
-        aarch64|arm64) yq_binary="yq_linux_arm64" ;;
-    esac
-
-    wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}"
-    chmod +x /usr/local/bin/yq
-}
-
 ensure_venv() {
     if [ ! -x "$VENV_PYTHON" ]; then
         stage "Creating virtual environment"
@@ -304,7 +286,6 @@ install_repeater() {
     cp "$SCRIPT_DIR/radio-settings.json" "$DATA_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/radio-presets.json" "$DATA_DIR/" 2>/dev/null || true
 
-    ensure_yq
     ensure_venv
 
     if [ -d "$SCRIPT_DIR/.git" ]; then
