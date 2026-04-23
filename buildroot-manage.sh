@@ -93,35 +93,66 @@ prompt_value() {
 
 prompt_secret() {
     local prompt="$1"
-    local first=""
-    local second=""
 
-    if [ ! -t 0 ]; then
-        fail "Interactive admin password prompt requires a TTY. Set PYMC_ADMIN_PASSWORD instead."
-    fi
+    python3 - "$prompt" <<'PY'
+import sys
+import termios
+import tty
 
-    while true; do
-        read -r -s -p "${prompt}: " first >&2
-        printf '\n' >&2
-        read -r -s -p "Confirm ${prompt,,}: " second >&2
-        printf '\n' >&2
+prompt = sys.argv[1]
 
-        [ -n "$first" ] || {
-            warn "Password cannot be empty."
-            continue
-        }
-        [ "${#first}" -ge 6 ] || {
-            warn "Password must be at least 6 characters."
-            continue
-        }
-        [ "$first" = "$second" ] || {
-            warn "Passwords do not match."
-            continue
-        }
+if not sys.stdin.isatty():
+    print("Interactive admin password prompt requires a TTY. Set PYMC_ADMIN_PASSWORD instead.", file=sys.stderr)
+    raise SystemExit(1)
 
-        printf '%s\n' "$first"
-        return 0
-    done
+fd = sys.stdin.fileno()
+
+def read_secret(label: str) -> str:
+    sys.stderr.write(f"{label}: ")
+    sys.stderr.flush()
+    original = termios.tcgetattr(fd)
+    chars = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                return "".join(chars)
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch in ("\x7f", "\b"):
+                if chars:
+                    chars.pop()
+                    sys.stderr.write("\b \b")
+                    sys.stderr.flush()
+                continue
+            if not ch or ord(ch) < 32:
+                continue
+            chars.append(ch)
+            sys.stderr.write("*")
+            sys.stderr.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+
+while True:
+    first = read_secret(prompt)
+    second = read_secret(f"Confirm {prompt.lower()}")
+
+    if not first:
+        print("  - Password cannot be empty.", file=sys.stderr)
+        continue
+    if len(first) < 6:
+        print("  - Password must be at least 6 characters.", file=sys.stderr)
+        continue
+    if first != second:
+        print("  - Passwords do not match.", file=sys.stderr)
+        continue
+
+    print(first)
+    break
+PY
 }
 
 ensure_root() {
