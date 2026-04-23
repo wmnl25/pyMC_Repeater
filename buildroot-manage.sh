@@ -142,55 +142,68 @@ preinstall_r2_wheels() {
 }
 
 create_init_script() {
-    cat > "$INIT_SCRIPT" <<EOF
+    cat > "$INIT_SCRIPT" <<'EOF'
 #!/bin/sh
-DAEMON="${VENV_PYTHON}"
-PIDFILE="${PIDFILE}"
-LOGFILE="${LOGFILE}"
-WORKDIR="${DATA_DIR}"
-CONFIG_FILE="${CONFIG_DIR}/config.yaml"
-RUN_AS="${SERVICE_USER}"
+DAEMON="__DAEMON__"
+PIDFILE="__PIDFILE__"
+LOGFILE="__LOGFILE__"
+WORKDIR="__WORKDIR__"
+CONFIG_FILE="__CONFIG_FILE__"
+RUN_AS="__RUN_AS__"
 
 start() {
-    mkdir -p "$(dirname "\$PIDFILE")" "$(dirname "\$LOGFILE")" "\$WORKDIR"
-    if [ -f "\$PIDFILE" ] && kill -0 "$(cat "\$PIDFILE")" 2>/dev/null; then
-        echo "${SERVICE_NAME} is already running."
+    mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOGFILE")" "$WORKDIR"
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "__SERVICE_NAME__ is already running."
         return 0
     fi
-    start-stop-daemon --start --quiet --background --make-pidfile --pidfile "\$PIDFILE" \\
-        --chuid "\$RUN_AS" --exec /bin/sh -- -c "cd \"\$WORKDIR\" && exec \"\$DAEMON\" -m repeater.main --config \"\$CONFIG_FILE\" >>\"\$LOGFILE\" 2>&1"
+    start-stop-daemon --start --quiet --background --make-pidfile --pidfile "$PIDFILE" \
+        --chuid "$RUN_AS" --exec /bin/sh -- -c "cd \"$WORKDIR\" && exec \"$DAEMON\" -m repeater.main --config \"$CONFIG_FILE\" >>\"$LOGFILE\" 2>&1"
 }
 
 stop() {
-    if [ ! -f "\$PIDFILE" ]; then
-        echo "${SERVICE_NAME} is not running."
+    if [ ! -f "$PIDFILE" ]; then
+        echo "__SERVICE_NAME__ is not running."
         return 0
     fi
-    start-stop-daemon --stop --quiet --retry 5 --pidfile "\$PIDFILE" || true
-    rm -f "\$PIDFILE"
+    start-stop-daemon --stop --quiet --retry 5 --pidfile "$PIDFILE" >/dev/null 2>&1 || true
+    rm -f "$PIDFILE"
 }
 
 status() {
-    if [ -f "\$PIDFILE" ] && kill -0 "$(cat "\$PIDFILE")" 2>/dev/null; then
-        echo "${SERVICE_NAME} is running."
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "__SERVICE_NAME__ is running."
         return 0
     fi
-    echo "${SERVICE_NAME} is stopped."
+    echo "__SERVICE_NAME__ is stopped."
     return 1
 }
 
-case "\${1:-}" in
+case "${1:-}" in
     start) start ;;
     stop) stop ;;
     restart) stop; start ;;
     status) status ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status}"
+        echo "Usage: $0 {start|stop|restart|status}"
         exit 1
         ;;
 esac
 EOF
+    sed -i \
+        -e "s|__DAEMON__|${VENV_PYTHON}|g" \
+        -e "s|__PIDFILE__|${PIDFILE}|g" \
+        -e "s|__LOGFILE__|${LOGFILE}|g" \
+        -e "s|__WORKDIR__|${DATA_DIR}|g" \
+        -e "s|__CONFIG_FILE__|${CONFIG_DIR}/config.yaml|g" \
+        -e "s|__RUN_AS__|${SERVICE_USER}|g" \
+        -e "s|__SERVICE_NAME__|${SERVICE_NAME}|g" \
+        "$INIT_SCRIPT"
     chmod 0755 "$INIT_SCRIPT"
+}
+
+get_primary_ip() {
+    ip -o -4 addr show dev eth0 2>/dev/null | awk 'NR==1 { sub(/\/.*/, "", $4); print $4; exit }'
 }
 
 service_exists() {
@@ -265,7 +278,7 @@ PY
 }
 
 install_repeater() {
-    local git_version machine_arch arch_tag platform_tag py_tag wheel_base ip_address
+    local git_version ip_address
 
     ensure_root
     stage "Preparing Buildroot installation"
@@ -310,7 +323,7 @@ install_repeater() {
     stage "Starting service"
     "$INIT_SCRIPT" restart
 
-    ip_address=$(hostname -I | awk '{print $1}')
+    ip_address=$(get_primary_ip)
     if is_running; then
         printf '\nService is running on: http://%s:8000\n' "${ip_address}"
     else
@@ -349,7 +362,7 @@ manage_service() {
 show_status() {
     local ip_address version
     version=$(get_version)
-    ip_address=$(hostname -I | awk '{print $1}')
+    ip_address=$(get_primary_ip)
 
     if ! is_installed; then
         printf 'Installation Status: Not Installed\n'
