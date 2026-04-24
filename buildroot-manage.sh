@@ -1176,12 +1176,6 @@ show_logs() {
     tail -f "$LOGFILE"
 }
 
-run_debug() {
-    ensure_root
-    mkdir -p "$LOG_DIR" "$DATA_DIR"
-    exec "$VENV_PYTHON" -m repeater.main --config "$CONFIG_DIR/config.yaml"
-}
-
 delegate_to_stock_manage() {
     exec bash "$SCRIPT_DIR/manage.sh" "$@"
 }
@@ -1203,7 +1197,6 @@ Commands:
   status      Show Buildroot service status
   logs        Tail the Buildroot log file
   uninstall   Remove the Buildroot installation
-  debug       Run repeater.main in the foreground
 EOF
 }
 
@@ -1234,9 +1227,6 @@ case "${1:-}" in
         ;;
     uninstall)
         uninstall_repeater
-        ;;
-    debug)
-        run_debug
         ;;
     ""|help|-h|--help)
         usage
