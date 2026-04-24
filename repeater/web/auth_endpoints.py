@@ -3,6 +3,7 @@ Authentication endpoints for login and token management
 """
 import cherrypy
 import logging
+import yaml
 from .auth.middleware import require_auth
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,16 @@ class AuthEndpoints:
         self.jwt_handler = jwt_handler
         self.token_manager = token_manager
         self.config_manager = config_manager
+
+    def _load_live_config(self):
+        config_path = getattr(self.config_manager, "config_path", None)
+        if not config_path:
+            return self.config
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except Exception:
+            return self.config
     
     @cherrypy.expose
     def login(self, **kwargs):
@@ -185,7 +196,8 @@ class AuthEndpoints:
             
             # Validate credentials against config
             # Check if username is 'admin' and password matches config
-            repeater_config = self.config.get('repeater', {})
+            live_config = self._load_live_config()
+            repeater_config = live_config.get('repeater', {})
             security_config = repeater_config.get('security', {})
             config_password = security_config.get('admin_password', '')
             
