@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import random
 import struct
 import time
 from collections import OrderedDict, deque
@@ -135,6 +136,24 @@ class RepeaterHandler(BaseHandler):
         self._transport_keys_cache = None
         self._transport_keys_cache_time = 0
         self._transport_keys_cache_ttl = 60  # Cache for 60 seconds
+
+        # Serialise all radio TX calls.
+        #
+        # Background: since the queue loop dispatches each packet as an
+        # asyncio.create_task, multiple _route_packet coroutines can have their
+        # TX delay timers running concurrently — which is the intended behaviour
+        # (firmware nodes do the same with a hardware timer).  However, the
+        # LoRa radio is half-duplex: it can only transmit one packet at a time.
+        # Without serialisation, two tasks whose delay timers expire near-
+        # simultaneously both call dispatcher.send_packet, interleaving SPI/serial
+        # commands to the radio and both passing the LBT check before either has
+        # actually transmitted.
+        #
+        # _tx_lock is acquired after each delay sleep and held for the entire
+        # send_packet call.  Delays still run concurrently; only the radio
+        # access is serialised.  This also eliminates the TOCTOU gap in duty-cycle
+        # enforcement — see schedule_retransmit / delayed_send for details.
+        self._tx_lock = asyncio.Lock()
 
         self._start_background_tasks()
 
@@ -954,8 +973,6 @@ class RepeaterHandler(BaseHandler):
 
     def _calculate_tx_delay(self, packet: Packet, snr: float = 0.0) -> float:
 
-        import random
-
         packet_len = packet.get_raw_length()
         airtime_ms = self.airtime_mgr.calculate_airtime(packet_len)
 
@@ -1050,29 +1067,59 @@ class RepeaterHandler(BaseHandler):
 
         async def delayed_send():
             await asyncio.sleep(delay)
-            last_error = None
+
+            # Each attempt gets its own lock acquisition so the 1-second retry
+            # backoff (local_transmission only) happens OUTSIDE the lock.
+            # Holding _tx_lock across asyncio.sleep(1.0) would block every other
+            # queued TX task for the full backoff period.
+            #
+            # Loop runs once for relayed packets, twice for local_transmission:
+            #   attempt 0 — initial try (no pre-sleep)
+            #   attempt 1 — retry after 1s backoff outside the lock
             for attempt in range(2 if local_transmission else 1):
-                try:
-                    await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
-                    self._record_packet_sent(fwd_pkt)
+                if attempt > 0:
+                    # Back-off OUTSIDE the lock — other tasks can transmit here.
+                    logger.info("Retrying local TX in 1s (lock released during backoff)...")
+                    await asyncio.sleep(1.0)
+
+                async with self._tx_lock:
+                    # ── Authoritative duty-cycle gate ──────────────────────────
+                    # The upfront can_transmit() call in __call__ is advisory: it
+                    # avoids scheduling packets obviously over budget, but cannot
+                    # prevent a race between tasks whose delay timers expire nearly
+                    # simultaneously.  Both pass the advisory check before either
+                    # records airtime, then both attempt to transmit.
+                    #
+                    # Inside _tx_lock only one task runs at a time.  The check and
+                    # record_tx() are effectively atomic — no TOCTOU window.
+                    # Re-checked every attempt because airtime state may change
+                    # while we wait for the lock or sleep through backoff.
                     if airtime_ms > 0:
-                        self.airtime_mgr.record_tx(airtime_ms)
-                    packet_size = fwd_pkt.get_raw_length()
-                    logger.info(
-                        f"Retransmitted packet ({packet_size} bytes, "
-                        f"{airtime_ms:.1f}ms airtime)"
-                    )
-                    return
-                except Exception as e:
-                    last_error = e
-                    logger.error(f"Retransmit failed: {e}")
-                    if local_transmission and attempt == 0:
-                        logger.info("Retrying local TX in 1s...")
-                        await asyncio.sleep(1.0)
-                    else:
-                        raise
-            if last_error is not None:
-                raise last_error
+                        can_tx_now, _ = self.airtime_mgr.can_transmit(airtime_ms)
+                        if not can_tx_now:
+                            logger.warning(
+                                "Packet dropped at TX time: duty-cycle exceeded "
+                                "(airtime=%.1fms)", airtime_ms,
+                            )
+                            return
+
+                    try:
+                        await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
+                        self._record_packet_sent(fwd_pkt)
+                        if airtime_ms > 0:
+                            self.airtime_mgr.record_tx(airtime_ms)
+                        packet_size = fwd_pkt.get_raw_length()
+                        logger.info(
+                            f"Retransmitted packet ({packet_size} bytes, "
+                            f"{airtime_ms:.1f}ms airtime)"
+                        )
+                        return
+                    except Exception as e:
+                        logger.error(f"Retransmit failed (attempt {attempt + 1}): {e}")
+                        if local_transmission and attempt == 0:
+                            pass  # release lock, outer loop sleeps, then retries
+                        else:
+                            raise
 
         return asyncio.create_task(delayed_send())
 
