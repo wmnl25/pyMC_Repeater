@@ -17,7 +17,6 @@ or:
 import asyncio
 import time
 import unittest
-from collections import deque
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -240,17 +239,6 @@ class TestTxLockSerialisation(unittest.IsolatedAsyncioTestCase):
 
         # First attempt: send_packet raises → triggers backoff.
         # Between attempts the budget is consumed, so the retry lock sees False.
-        call_seq = iter([
-            # (can_transmit result, send_packet behaviour)
-            (True, RuntimeError("transient failure")),   # attempt 0: passes gate, send fails
-            (False, None),                                # attempt 1: gate rejects
-        ])
-
-        async def send_side_effect(*args, **kwargs):
-            _, exc = next(call_seq_sends)
-            if exc:
-                raise exc
-
         transmit_seq = iter([(True, 0.0), (False, 5.0)])
         h.airtime_mgr.can_transmit.side_effect = lambda ms: next(transmit_seq)
 
